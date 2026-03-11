@@ -38,6 +38,245 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
 
+def load_dinov3_model(model_name: str, weights_path: str, dinov3_repo_dir: str):
+    """Load DINOv3 model from local .pth checkpoint using torch.hub.
+    
+    Args:
+        model_name: e.g., 'dinov3_vits16', 'dinov3_vitb16', 'dinov3_convnext_base'
+        weights_path: Path to local .pth checkpoint file
+        dinov3_repo_dir: Path to local DINOv3 repository directory
+    
+    Returns:
+        DINOv3 model instance from local repository
+    """
+    import os
+    
+    # Validate DINOv3 repository path
+    dinov3_repo_dir = os.path.abspath(dinov3_repo_dir)
+    if not os.path.isdir(dinov3_repo_dir):
+        raise FileNotFoundError(
+            f"DINOv3 repository not found at {dinov3_repo_dir}. "
+            f"Please provide a valid path to the DINOv3 repository."
+        )
+    
+    # Validate checkpoint file
+    if not os.path.isfile(weights_path):
+        raise FileNotFoundError(f"Checkpoint file not found: {weights_path}")
+    
+    # Supported model names
+    supported_models = [
+        'dinov3_vits16', 'dinov3_vits16plus', 'dinov3_vitb16', 
+        'dinov3_vitl16', 'dinov3_vitl16plus', 'dinov3_vith16plus', 'dinov3_vit7b16',
+        'dinov3_convnext_tiny', 'dinov3_convnext_small', 
+        'dinov3_convnext_base', 'dinov3_convnext_large'
+    ]
+    
+    if model_name not in supported_models:
+        raise ValueError(
+            f"Unknown DINOv3 model: {model_name}. "
+            f"Available models: {', '.join(supported_models)}"
+        )
+    
+    # Load model using torch.hub from local repository
+    # This uses the official DINOv3 implementation
+    print(f"Loading DINOv3 model '{model_name}' from {dinov3_repo_dir}")
+    model = torch.hub.load(
+        dinov3_repo_dir,
+        model_name,
+        source='local',
+        weights=weights_path,
+        pretrained=False  # We're providing weights explicitly
+    )
+    
+    return model
+
+
+class LayerNorm2d(nn.Module):
+    """
+    LayerNorm for [B, C, H, W] inputs.
+    """
+    def __init__(self, num_channels: int, eps: float = 1e-6):
+        super().__init__()
+        # elementwise_affine=True allows learning gamma/beta per channel to suppress outliers
+        self.norm = nn.LayerNorm(num_channels, eps=eps, elementwise_affine=True)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [B, C, H, W] -> [B, H, W, C] for LayerNorm -> [B, C, H, W]
+        x = x.permute(0, 2, 3, 1)
+        x = self.norm(x)
+        x = x.permute(0, 3, 1, 2)
+        return x
+
+
+class DINOv3Backbone(nn.Module):
+    """
+    Wrapper for DINOv3 models loaded from local repository using torch.hub (ViT and ConvNeXt variants).
+    """
+
+    def __init__(self, model_name: str, weights_path: str, dinov3_repo_dir: str, output_dim: int = 512):
+        super().__init__()
+
+        # Load DINOv3 model from local repository
+        self.model = load_dinov3_model(model_name, weights_path, dinov3_repo_dir)
+        self.model_name = model_name
+        self.is_vit = 'vit' in model_name.lower()
+
+        # =================================================================
+        # 1. Feature Dimensions Definition
+        # =================================================================
+        feature_dims = {
+            'dinov3_vits16': 384,
+            'dinov3_vits16plus': 384,
+            'dinov3_vitb16': 768,
+            'dinov3_vitl16': 1024,
+            'dinov3_vitl16plus': 1024,
+            'dinov3_vith16plus': 1280,
+            'dinov3_vit7b16': 4096,
+            # ConvNeXt uses Stage 2 output
+            'dinov3_convnext_tiny': 768,   # Original Stage 3: 768
+            'dinov3_convnext_small': 768,  # Original Stage 3: 768
+            'dinov3_convnext_base': 1024,   # Original Stage 3: 1024
+            'dinov3_convnext_large': 1536,  # Original Stage 3: 1536
+        }
+        
+        if model_name not in feature_dims:
+            # Fallback logic if exact string match fails but type is known
+            if self.is_vit:
+                self.feature_dim = self.model.embed_dim
+            else:
+                # Attempt to infer Stage 2 dim from model config if available, else raise
+                raise ValueError(f"Model {model_name} not explicitly found in dimension map. Please verify model name.")
+        else:
+            self.feature_dim = feature_dims[model_name]
+
+        # =================================================================
+        # 2. Projection and Normalization
+        # =================================================================
+        if self.is_vit:
+            # ViT: [B, N_patches, feature_dim] -> [B, N_patches, output_dim]
+            self.proj = nn.Linear(self.feature_dim, output_dim)
+            # self.feature_norm = nn.LayerNorm(self.feature_dim)
+        else:
+            # ConvNeXt: [B, C, H, W] -> [B, output_dim, H, W]
+            self.proj = nn.Conv2d(self.feature_dim, output_dim, kernel_size=1)
+            # # Use custom LayerNorm2d (Trainable) to suppress outliers without Batch dependency
+            # self.feature_norm = LayerNorm2d(self.feature_dim)
+
+        # ImageNet normalization buffers
+        self.register_buffer("normalize_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("normalize_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, x: Tensor) -> dict:
+        """
+        Returns:
+            Dict with "feature_map": [B, output_dim, H_feat, W_feat]
+        """
+        # Apply ImageNet normalization
+        x = (x - self.normalize_mean) / self.normalize_std
+
+        if self.is_vit:
+            # reshape=True: Returns [B, C, H, W]
+            features = self.model.get_intermediate_layers(x, n=1, reshape=True, norm=True)[0]
+            
+            # Prepare for Linear Projection (requires channels last)
+            B, C, H, W = features.shape
+            features = features.permute(0, 2, 3, 1).flatten(1, 2) # [B, N, C]
+            
+            # Normalize and Project
+            features = self.feature_norm(features)
+            patch_tokens = self.proj(features)      # [B, N, output_dim]
+            
+            # Reshape back to spatial [B, output_dim, H, W]
+            feature_map = patch_tokens.transpose(1, 2).reshape(B, -1, H, W)
+            
+        else:
+            # # reshape=True: Returns [B, C, H, W]
+            # intermediate_outputs = self.model.get_intermediate_layers(x, n=2, reshape=True, norm=True)
+            
+            # # [0] selects Stage 2 (earlier layer), [1] would be Stage 3
+            # features = intermediate_outputs[1] 
+            
+            # # Apply trainable LayerNorm to suppress feature dimension outliers
+            # features = self.feature_norm(features)
+
+            # reshape=True: Returns [B, C, H, W]
+            intermediate_outputs = self.model.get_intermediate_layers(x, n=1, reshape=True, norm=True)
+            
+            # [0] selects Stage 2 (earlier layer), [1] would be Stage 3
+            features = intermediate_outputs[0] 
+            
+            # Project to ACT model dimension
+            feature_map = self.proj(features)
+
+        return {"feature_map": feature_map}
+
+
+def build_backbone(config: ACTConfig) -> tuple[nn.Module, int]:
+    """Factory method to build vision backbone based on config.
+    
+    Args:
+        config: ACTConfig instance
+    
+    Returns:
+        Tuple of (backbone_module, output_channels)
+        - backbone_module: Module with forward() returning {"feature_map": Tensor[B, C, H, W]}
+        - output_channels: Number of channels in the output feature map (for projection layer)
+    """
+    # Use backbone_type if specified, otherwise fall back to vision_backbone
+    backbone_type = config.backbone_type if config.backbone_type is not None else config.vision_backbone
+    
+    if backbone_type.startswith("resnet"):
+        # Existing ResNet path
+        backbone_model = getattr(torchvision.models, backbone_type)(
+            replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
+            weights=config.pretrained_backbone_weights,
+            norm_layer=FrozenBatchNorm2d,
+        )
+        backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+        
+        # Get output channels for ResNet variants
+        resnet_out_channels = {
+            "resnet18": 512, "resnet34": 512, "resnet50": 2048, 
+            "resnet101": 2048, "resnet152": 2048
+        }
+        out_channels = resnet_out_channels.get(backbone_type, backbone_model.fc.in_features)
+        
+        return backbone, out_channels
+    
+    elif backbone_type.startswith("dinov3"):
+        # DINOv3 path
+        import os
+        
+        if config.pretrained_backbone_weights is None:
+            raise ValueError(
+                f"DINOv3 models require pretrained weights. "
+                f"Set pretrained_backbone_weights to the path of your local .pth checkpoint file."
+            )
+        
+        weights_path = config.pretrained_backbone_weights
+        if not os.path.isfile(weights_path):
+            raise FileNotFoundError(f"DINOv3 checkpoint file not found: {weights_path}")
+        
+        # Locate local DINOv3 repo relative to this file
+        current_file = os.path.abspath(__file__)
+        # Adjust 'os.path.dirname' calls based on your project structure depth
+        # Assuming: project_root/lerobot/policies/act/backbone.py -> project_root/dinov3
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))))
+        dinov3_repo_dir = os.path.join(project_root, 'dinov3')
+        
+        backbone = DINOv3Backbone(
+            model_name=backbone_type,
+            weights_path=weights_path,
+            dinov3_repo_dir=dinov3_repo_dir,
+            output_dim=config.dim_model
+        )
+        
+        # DINOv3 wrapper handles projection internally, so it outputs dim_model channels
+        return backbone, config.dim_model
+    
+    else:
+        raise ValueError(f"Unsupported backbone type: {backbone_type}")
+
 class ACTPolicy(PreTrainedPolicy):
     """
     Action Chunking Transformer Policy as per Learning Fine-Grained Bimanual Manipulation with Low-Cost
@@ -321,15 +560,7 @@ class ACT(nn.Module):
 
         # Backbone for image feature extraction.
         if self.config.image_features:
-            backbone_model = getattr(torchvision.models, config.vision_backbone)(
-                replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
-                weights=config.pretrained_backbone_weights,
-                norm_layer=FrozenBatchNorm2d,
-            )
-            # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
-            # feature map).
-            # Note: The forward method of this returns a dict: {"feature_map": output}.
-            self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
+            self.backbone, backbone_out_channels = build_backbone(config)
 
         # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
@@ -347,9 +578,15 @@ class ACT(nn.Module):
             )
         self.encoder_latent_input_proj = nn.Linear(config.latent_dim, config.dim_model)
         if self.config.image_features:
-            self.encoder_img_feat_input_proj = nn.Conv2d(
-                backbone_model.fc.in_features, config.dim_model, kernel_size=1
-            )
+            # Only add projection if backbone doesn't already project to dim_model
+            # (DINOv3 already projects, ResNet needs projection)
+            if backbone_out_channels != config.dim_model:
+                self.encoder_img_feat_input_proj = nn.Conv2d(
+                    backbone_out_channels, config.dim_model, kernel_size=1
+                )
+            else:
+                # DINOv3 case: no additional projection needed
+                self.encoder_img_feat_input_proj = nn.Identity()
         # Transformer encoder positional embeddings.
         n_1d_tokens = 1  # for the latent
         if self.config.robot_state_feature:
@@ -361,8 +598,14 @@ class ACT(nn.Module):
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
 
         # Transformer decoder.
-        # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
-        self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
+        # Instruction conditioning.
+        if self.config.use_instruction_conditioning:
+            self.instruction_embedding = nn.Embedding(config.instruction_vocab_size, config.dim_model)
+            # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
+            # Add 1 extra position for the instruction token.
+            self.decoder_pos_embed = nn.Embedding(config.chunk_size + 1, config.dim_model)
+        else:
+            self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
 
         # Final action regression head on the output of the transformer's decoder.
         self.action_head = nn.Linear(config.dim_model, self.config.action_feature.shape[0])
@@ -490,11 +733,27 @@ class ACT(nn.Module):
         # Forward pass through the transformer modules.
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
         # TODO(rcadene, alexander-soare): remove call to `device` ; precompute and use buffer
+        
+        # Prepare decoder input
+        decoder_seq_len = self.config.chunk_size + (1 if self.config.use_instruction_conditioning else 0)
         decoder_in = torch.zeros(
-            (self.config.chunk_size, batch_size, self.config.dim_model),
+            (decoder_seq_len, batch_size, self.config.dim_model),
             dtype=encoder_in_pos_embed.dtype,
             device=encoder_in_pos_embed.device,
         )
+        
+        # If using instruction conditioning, set the first token to instruction embedding
+        if self.config.use_instruction_conditioning:
+            # Get instruction IDs from batch (B,)
+            instruction_ids = batch.get('instruction_id')
+            if instruction_ids is None:
+                # If not provided, default to 0
+                instruction_ids = torch.zeros(batch_size, dtype=torch.long, device=encoder_in_pos_embed.device)
+            # Get instruction embeddings (B, D)
+            instr_embeds = self.instruction_embedding(instruction_ids)
+            # Set first token
+            decoder_in[0] = instr_embeds
+        
         decoder_out = self.decoder(
             decoder_in,
             encoder_out,
@@ -502,6 +761,10 @@ class ACT(nn.Module):
             decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
         )
 
+        # Skip instruction token if using instruction conditioning
+        if self.config.use_instruction_conditioning:
+            decoder_out = decoder_out[1:]  # Remove first token (instruction token)
+        
         # Move back to (B, S, C).
         decoder_out = decoder_out.transpose(0, 1)
 

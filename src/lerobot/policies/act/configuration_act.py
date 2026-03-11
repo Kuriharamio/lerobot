@@ -28,7 +28,7 @@ class ACTConfig(PreTrainedConfig):
     Defaults are configured for training on bimanual Aloha tasks like "insertion" or "transfer".
 
     The parameters you will most likely need to change are the ones which depend on the environment / sensors.
-    Those are: `input_features` and `output_features`.
+    Those are: `input_shapes` and 'output_shapes`.
 
     Notes on the inputs and outputs:
         - Either:
@@ -48,12 +48,21 @@ class ACTConfig(PreTrainedConfig):
             This should be no greater than the chunk size. For example, if the chunk size size 100, you may
             set this to 50. This would mean that the model predicts 100 steps worth of actions, runs 50 in the
             environment, and throws the other 50 out.
-        input_features: A dictionary defining the PolicyFeature of the input data for the policy. The key represents
-            the input data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
-        output_features: A dictionary defining the PolicyFeature of the output data for the policy. The key represents
-            the output data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
-        normalization_mapping: A dictionary that maps from a str value of FeatureType (e.g., "STATE", "VISUAL") to
-            a corresponding NormalizationMode (e.g., NormalizationMode.MIN_MAX)
+        input_shapes: A dictionary defining the shapes of the input data for the policy. The key represents
+            the input data name, and the value is a list indicating the dimensions of the corresponding data.
+            For example, "observation.image" refers to an input from a camera with dimensions [3, 96, 96],
+            indicating it has three color channels and 96x96 resolution. Importantly, `input_shapes` doesn't
+            include batch dimension or temporal dimension.
+        output_shapes: A dictionary defining the shapes of the output data for the policy. The key represents
+            the output data name, and the value is a list indicating the dimensions of the corresponding data.
+            For example, "action" refers to an output shape of [14], indicating 14-dimensional actions.
+            Importantly, `output_shapes` doesn't include batch dimension or temporal dimension.
+        input_normalization_modes: A dictionary with key representing the modality (e.g. "observation.state"),
+            and the value specifies the normalization mode to apply. The two available modes are "mean_std"
+            which subtracts the mean and divides by the standard deviation and "min_max" which rescale in a
+            [-1, 1] range.
+        output_normalization_modes: Similar dictionary as `normalize_input_modes`, but to unnormalize to the
+            original scale. Note that this is also used for normalizing the training targets.
         vision_backbone: Name of the torchvision resnet backbone to use for encoding images.
         pretrained_backbone_weights: Pretrained weights from torchvision to initialize the backbone.
             `None` means no pretrained weights.
@@ -72,6 +81,11 @@ class ACTConfig(PreTrainedConfig):
             documentation in the policy class).
         latent_dim: The VAE's latent dimension.
         n_vae_encoder_layers: The number of transformer layers to use for the VAE's encoder.
+        use_instruction_conditioning: Whether to use discrete instruction conditioning. When enabled, an
+            instruction embedding is prepended to the decoder input to condition action generation on
+            discrete task IDs.
+        instruction_vocab_size: The number of discrete instructions (task IDs) in the vocabulary. Required
+            when use_instruction_conditioning is True. Can be auto-detected during training.
         temporal_ensemble_coeff: Coefficient for the exponential weighting scheme to apply for temporal
             ensembling. Defaults to None which means temporal ensembling is not used. `n_action_steps` must be
             1 when using this feature, as inference needs to happen at every step to form an ensemble. For
@@ -99,6 +113,8 @@ class ACTConfig(PreTrainedConfig):
     vision_backbone: str = "resnet18"
     pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
     replace_final_stride_with_dilation: int = False
+    # New fields for configurable backbone support
+    backbone_type: str | None = None  # If None, uses vision_backbone for backward compatibility
     # Transformer layers.
     pre_norm: bool = False
     dim_model: int = 512
@@ -114,6 +130,10 @@ class ACTConfig(PreTrainedConfig):
     use_vae: bool = True
     latent_dim: int = 32
     n_vae_encoder_layers: int = 4
+
+    # Instruction conditioning.
+    use_instruction_conditioning: bool = False
+    instruction_vocab_size: int | None = None
 
     # Inference.
     # Note: the value used in ACT when temporal ensembling is enabled is 0.01.
@@ -132,9 +152,15 @@ class ACTConfig(PreTrainedConfig):
         super().__post_init__()
 
         """Input validation (not exhaustive)."""
-        if not self.vision_backbone.startswith("resnet"):
+        # Use backbone_type if specified, otherwise fall back to vision_backbone
+        effective_backbone = self.backbone_type if self.backbone_type is not None else self.vision_backbone
+        
+        # Validate backbone type
+        supported_backbones = ["resnet", "dinov3"]
+        if not any(effective_backbone.startswith(prefix) for prefix in supported_backbones):
             raise ValueError(
-                f"`vision_backbone` must be one of the ResNet variants. Got {self.vision_backbone}."
+                f"`vision_backbone` or `backbone_type` must be one of the ResNet or DINOv3 variants. "
+                f"Got {effective_backbone}."
             )
         if self.temporal_ensemble_coeff is not None and self.n_action_steps > 1:
             raise NotImplementedError(
@@ -149,6 +175,14 @@ class ACTConfig(PreTrainedConfig):
         if self.n_obs_steps != 1:
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
+            )
+        if self.use_instruction_conditioning and self.instruction_vocab_size is None:
+            raise ValueError(
+                "When `use_instruction_conditioning` is True, `instruction_vocab_size` must be specified."
+            )
+        if self.use_instruction_conditioning and self.instruction_vocab_size is not None and self.instruction_vocab_size < 1:
+            raise ValueError(
+                f"`instruction_vocab_size` must be at least 1. Got {self.instruction_vocab_size}."
             )
 
     def get_optimizer_preset(self) -> AdamWConfig:

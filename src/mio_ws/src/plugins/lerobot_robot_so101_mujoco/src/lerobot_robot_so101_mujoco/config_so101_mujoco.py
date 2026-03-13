@@ -47,13 +47,13 @@ class SO101MujocoRobotConfig(RobotConfig):
 	control_dt: float = 0.02
 	delta_position_scale_m: float = 0.0005
 	delta_rotation_scale_rad: float = 0.01
-	gripper_step_rad: float = 0.08
+	gripper_step_rad: float = 0.2
 	ik_solver: str = "quadprog"
 	ik_max_iters: int = 50
 	ik_internal_dt: float = 0.002
 	ik_velocity_stuck_threshold: float = 1e-8
 	success_position_tolerance: float = 5e-3
-	success_orientation_tolerance_rad: float = 2e-1
+	success_orientation_tolerance_rad: float = 5e-1
 
 
 __all__ = ["SO101MujocoRobotConfig"]

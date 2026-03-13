@@ -55,6 +55,7 @@ class SO101MujocoRobot(Robot):
         self.config = config
         self._connected = False
         self._mujoco_context: MujocoContext | None = None
+        self._last_sim_time: float = 0.0
         self._ik_solver: IKSolver | None = None
         self._target_position_xyz: np.ndarray | None = None
         self._target_quaternion_wxyz: np.ndarray | None = None
@@ -205,6 +206,26 @@ class SO101MujocoRobot(Robot):
             return action
 
     def _step_once(self) -> None:
+        # Detect MuJoCo simulation reset (e.g. user pressed reset in the viewer).
+        current_time = float(self._mujoco_context.data.time)
+        if current_time < self._last_sim_time or (current_time == 0.0 and self._last_sim_time > 0.0):
+            LOGGER.info("MuJoCo simulation reset detected, realigning mocap to end-effector.")
+            align_mocap_to_end_effector(
+                self._mujoco_context,
+                self._ik_solver.mocap_id,
+                self._ik_solver.site_id,
+            )
+            # Re-sync IK solver and internal joint state with the reset simulation.
+            self._ik_solver.reset()
+            self._target_position_xyz, self._target_quaternion_wxyz = get_mocap_pose(
+                self._mujoco_context,
+                self._ik_solver.mocap_id,
+            )
+            with self._lock:
+                self._last_joint_state_rad = get_joint_positions(self._mujoco_context)
+
+        self._last_sim_time = current_time
+
         action = self._consume_delta_action()
         delta_xyz = np.array(
             [

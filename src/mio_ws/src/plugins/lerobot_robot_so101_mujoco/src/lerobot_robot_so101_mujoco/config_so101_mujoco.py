@@ -5,9 +5,9 @@ from pathlib import Path
 
 from lerobot.robots import RobotConfig
 
-SO101_JOINT_NAMES: tuple[str, ...] = ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")
+SO101_JOINT_NAMES: tuple[str, ...] = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper")
 SO101_GRIPPER_NAME: str = SO101_JOINT_NAMES[-1]
-SO101_DEFAULT_EE_SITE = "endpoint"
+SO101_DEFAULT_EE_SITE = "gripperframe"
 SO101_DEFAULT_MOCAP_TARGET = "arm_target"
 
 def default_xml_path() -> Path:
@@ -44,11 +44,8 @@ class SO101MujocoRobotConfig(RobotConfig):
 	xml_path: Path = default_xml_path()
 	end_effector_site: str = SO101_DEFAULT_EE_SITE
 	target_mocap_body: str = SO101_DEFAULT_MOCAP_TARGET
-	remote_host: str = "127.0.0.1"
-	remote_port: int = 8765
-	remote_timeout_s: float = 0.25
 	control_dt: float = 0.02
-	delta_position_scale_m: float = 0.001
+	delta_position_scale_m: float = 0.0005
 	delta_rotation_scale_rad: float = 0.01
 	gripper_step_rad: float = 0.08
 	ik_solver: str = "quadprog"

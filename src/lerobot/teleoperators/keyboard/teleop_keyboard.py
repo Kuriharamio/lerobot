@@ -195,40 +195,40 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
         for key, val in self.current_pressed.items():
             if key in (keyboard.Key.alt, keyboard.Key.alt_r):
                 continue
-            if key == keyboard.Key.up:
+            if key == "w":
                 if alt_held:
                     delta_ry = int(val)
                 else:
                     delta_y = -int(val)
-            elif key == keyboard.Key.down:
+            elif key == "s":
                 if alt_held:
                     delta_ry = -int(val)
                 else:
                     delta_y = int(val)
-            elif key == keyboard.Key.left:
+            elif key == "a":
                 if alt_held:
                     delta_rz = -int(val)
                 else:
                     delta_x = int(val)
-            elif key == keyboard.Key.right:
+            elif key == "d":
                 if alt_held:
                     delta_rz = int(val)
                 else:
                     delta_x = -int(val)
-            elif key == keyboard.Key.shift:
+            elif key == "q":
                 if alt_held:
                     delta_rx = int(val)
                 else:
                     delta_z = -int(val)
-            elif key == keyboard.Key.shift_r:
+            elif key == "e":
                 if alt_held:
                     delta_rx = -int(val)
                 else:
                     delta_z = int(val)
-            elif key == keyboard.Key.ctrl_r:
+            elif key == keyboard.Key.shift_r:
                 # Gripper actions are expected to be between 0 (close), 1 (stay), 2 (open)
                 gripper_action = int(val) + 1
-            elif key == keyboard.Key.ctrl_l:
+            elif key == keyboard.Key.shift:
                 gripper_action = int(val) - 1
             elif val:
                 # If the key is pressed, add it to the misc_keys_queue
@@ -277,16 +277,7 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
             }
 
         # Check if any movement keys are currently pressed (indicates intervention)
-        movement_keys = [
-            keyboard.Key.up,
-            keyboard.Key.down,
-            keyboard.Key.left,
-            keyboard.Key.right,
-            keyboard.Key.shift,
-            keyboard.Key.shift_r,
-            keyboard.Key.ctrl_r,
-            keyboard.Key.ctrl_l,
-        ]
+        movement_keys = ["w", "s", "a", "d", "q", "e", keyboard.Key.shift, keyboard.Key.shift_r]
         is_intervention = any(self.current_pressed.get(key, False) for key in movement_keys)
 
         # Check for episode control commands from misc_keys_queue

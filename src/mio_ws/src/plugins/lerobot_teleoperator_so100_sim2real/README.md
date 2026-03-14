@@ -23,4 +23,8 @@ Zero-pose alignment (optional):
 `sim_zero_joint_angles` defines the simulated joint angles when the real arm is at physical zero.
 Order: `[shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]`
 
+`sim_joint_directions` defines per-joint motion direction mapping from sim to real (`-1` or `1`).
+Order: `[shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll]`
+
+
 

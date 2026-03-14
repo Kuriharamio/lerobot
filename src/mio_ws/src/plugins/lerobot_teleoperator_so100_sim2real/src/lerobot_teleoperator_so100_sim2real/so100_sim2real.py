@@ -33,6 +33,7 @@ class SO100Sim2Real(Teleoperator):
         self._connected = False
         self._rpc: ServerProxy | None = None
         self._body_joint_zero_offsets = self._build_body_joint_zero_offsets()
+        self._body_joint_directions = self._build_body_joint_directions()
         self._last_action: dict[str, float] = {
             f"{joint}.pos": 0.0 for joint in SO100_JOINT_NAMES
         }
@@ -82,6 +83,7 @@ class SO100Sim2Real(Teleoperator):
             raw_value = float(payload.get(joint, 0.0))
             value = math.degrees(raw_value) if self.config.use_degrees else raw_value
             value = value - self._body_joint_zero_offsets[joint]
+            value = value * self._body_joint_directions[joint]
             action[f"{joint}.pos"] = float(value)
 
         gripper_raw = float(payload.get("gripper", 0.0))
@@ -123,6 +125,30 @@ class SO100Sim2Real(Teleoperator):
 
         return {
             joint: configured[index]
+            for index, joint in enumerate(SO100_BODY_JOINT_NAMES)
+        }
+
+    def _build_body_joint_directions(self) -> dict[str, float]:
+        configured = [float(value) for value in self.config.sim_joint_directions]
+        expected_len = len(SO100_BODY_JOINT_NAMES)
+
+        if len(configured) != expected_len:
+            LOGGER.warning(
+                "SO100 sim2real expected %s joint directions but got %s; fallback to all +1 directions.",
+                expected_len,
+                len(configured),
+            )
+            configured = [1.0] * expected_len
+
+        normalized: list[float] = []
+        for value in configured:
+            if value == 0.0:
+                normalized.append(1.0)
+                continue
+            normalized.append(1.0 if value > 0.0 else -1.0)
+
+        return {
+            joint: normalized[index]
             for index, joint in enumerate(SO100_BODY_JOINT_NAMES)
         }
 

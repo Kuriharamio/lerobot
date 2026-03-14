@@ -1,6 +1,6 @@
-# lerobot_robot_so101_mujoco
+# lerobot_robot_so100_mujoco
 
-Installable LeRobot robot plugin package for SO101 MuJoCo integration.
+Installable LeRobot robot plugin package for SO100 MuJoCo integration.
 
 Install locally:
 
@@ -14,7 +14,7 @@ pip install -e .
 
 ```bash
 lerobot-teleoperate \
-	--robot.type=so101_mujoco \
+	--robot.type=so100_mujoco \
 	--teleop.type=keyboard_ee \
 	--fps=50
 ```

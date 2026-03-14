@@ -1,0 +1,133 @@
+<mujoco model="so100">
+  <compiler angle="radian" meshdir="assets" texturedir="assets" autolimits="true"/>
+
+  <default>
+    <default class="so100">
+      <joint damping="1" frictionloss="0.1" armature="0.005"/>
+      <position kp="50"/>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+      </default>
+      <default class="collision">
+        <geom group="3"/>
+      </default>
+    </default>
+    <default class="sts3215">
+      <geom contype="0" conaffinity="0"/>
+      <joint damping="0.60" frictionloss="0.052" armature="0.028"/>
+      <position kp="17.8"/>
+    </default>
+    <default class="backlash">
+      <joint damping="0.01" frictionloss="0" armature="0.01" limited="true" range="-0.008726646259971648 0.008726646259971648"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <!-- Floor & Light-->
+    <light pos="0 0 3.5" dir="0 0 -1" directional="true" />
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane" />
+    <!-- Table -->
+    <body name="table_base" pos="0 0 0" >
+      <geom name="table_top" type="box" size="0.6 0.4 0.02" pos="0 0 0.35" material="default_mtl"/>
+      <geom name="table_leg1" type="cylinder" size="0.03 0.17" pos="0.5 0.3 0.17" material="shiny_black"/>
+      <geom name="table_leg2" type="cylinder" size="0.03 0.17" pos="-0.5 0.3 0.17" material="shiny_black"/>
+      <geom name="table_leg3" type="cylinder" size="0.03 0.17" pos="0.5 -0.3 0.17" material="shiny_black"/>
+      <geom name="table_leg4" type="cylinder" size="0.03 0.17" pos="-0.5 -0.3 0.17" material="shiny_black"/>
+    </body>
+    <!-- Arm target mocap -->
+    <body name="arm_target" pos="0 0 0" quat="1 0 0 0" mocap="true">
+      <inertial pos="0 0 0" mass="1e-3" diaginertia="1e-5 1e-5 1e-5"/>
+      <geom name="arm_target_box" type="box" size="0.025 0.025 0.025" class="visual" rgba="0.4 1.0 0.4 0.4"/>
+      <geom name="arm_target_x_arrow" type="cylinder" pos="0.03 0 0" euler="0 1.5708 0" size=".002 0.03" class="visual" rgba="1 0 0 .2"/>
+      <geom name="arm_target_y_arrow" type="cylinder" pos="0 0.03 0" euler="1.5708 0 0" size=".002 0.03" class="visual" rgba="0 1 0 .2"/>
+      <geom name="arm_target_z_arrow" type="cylinder" pos="0 0 0.03" euler="0 0 0" size=".002 0.03" class="visual" rgba="0 0 1 .2"/>
+    </body>
+    <!-- Robot -->
+    <body name="base" childclass="so100" pos="-0.5 0 0.37" euler="0 0 1.5708">
+      <!-- <geom name="base_collision" type="mesh" mesh="collision_Base" class="collision" /> -->
+      <geom name="base_visual_0" type="mesh" mesh="base_Base" material="3d_printed" class="visual" />
+      <geom name="base_visual_1" type="mesh" mesh="base_Base_Motor" material="sts3215" class="visual" />
+      <body name="shoulder" pos="0 -0.0452 0.0165" quat="0.7071 0.7071 0 0">
+        <inertial pos="-9.07886e-05 0.0590972 0.031089" mass="0.119226" diaginertia="5.94278e-05 5.89975e-05 3.13712e-05" />
+        <joint name="shoulder_pan" type="hinge" range="-2 2" axis="0 1 0" class="sts3215" />
+        <geom name="shoulder_collision" type="mesh" mesh="collision_Rotation_Pitch" class="collision" />
+        <geom name="shoulder_visual_0" type="mesh" mesh="shoulder_Rotation_Pitch" material="3d_printed" class="visual" />
+        <geom name="shoulder_visual_1" type="mesh" mesh="shoulder_Rotation_Pitch_Motor" material="sts3215" class="visual" />
+        <body name="upper_arm" pos="0 0.1025 0.0306" quat="0.6216 -0.7833 0 0">
+          <inertial pos="-1.72052e-05 0.0701802 0.00310545" mass="0.162409" diaginertia="0.000213312 0.000167164 7.01522e-05" />
+          <joint name="shoulder_lift" type="hinge" range="0 3.5" axis="1 0 0" class="sts3215"/>
+          <geom name="upper_arm_collision" type="mesh" mesh="collision_Upper_Arm" class="collision" />
+          <geom name="upper_arm_visual_0" type="mesh" mesh="upper_arm_Upper_Arm" material="3d_printed" class="visual" />
+          <geom name="upper_arm_visual_1" type="mesh" mesh="upper_arm_Upper_Arm_Motor" material="sts3215" class="visual" />
+          <body name="lower_arm" pos="0 0.11257 0.028" quat="0.7071 0.7071 0 0">
+            <inertial pos="-0.00339604 0.00137796 0.0768007" mass="0.147968" diaginertia="0.000138803 0.000107748 4.84242e-05" />
+            <joint name="elbow_flex" type="hinge" range="-3.14158 0" axis="1 0 0" class="sts3215" />
+            <geom name="lower_arm_collision" type="mesh" mesh="collision_Lower_Arm" class="collision" />
+            <geom name="lower_arm_visual_0" type="mesh" mesh="lower_arm_Lower_Arm" material="3d_printed" class="visual" />
+            <geom name="lower_arm_visual_1" type="mesh" mesh="lower_arm_Lower_Arm_Motor" material="sts3215" class="visual" />
+            <body name="wrist" pos="0 0.0052 0.1349" quat="0.8776 -0.4794 0 0">
+              <inertial pos="-0.00852653 -0.0352279 -2.34622e-05" mass="0.0661321" diaginertia="3.45403e-05 2.39041e-05 1.94704e-05" />
+              <joint name="wrist_flex" type="hinge" range="-2.5 1.2" axis="1 0 0" class="sts3215" />
+              <geom name="wrist_collision" type="mesh" mesh="collision_Wrist_Pitch_Roll" class="collision" />
+              <geom name="wrist_visual_0" type="mesh" mesh="wrist_Wrist_Pitch_Roll" material="3d_printed" class="visual" />
+              <geom name="wrist_visual_1" type="mesh" mesh="wrist_Wrist_Pitch_Roll_Motor" material="sts3215" class="visual" />
+              <body name="gripper" pos="0 -0.0601 0" quat="0.7071 0 0.7071 0">
+                <inertial pos="0.00552377 -0.0280167 0.000483583" mass="0.0929859" diaginertia="5.03136e-05 4.64098e-05 2.72961e-05" />
+                <joint name="wrist_roll" type="hinge" range="-3.14158 3.14158" axis="0 1 0" class="sts3215" />
+                <geom name="gripper_visual_0" type="mesh" mesh="gripper_Fixed_Jaw" material="3d_printed" class="visual" />
+                <geom name="gripper_visual_1" type="mesh" mesh="gripper_Fixed_Jaw_Motor" material="sts3215" class="visual" />
+                <site group="3" name="gripperframe" pos="0.0 -0.1 0.0" euler="0 -1.5708 -1.5708" rgba="0.2 0.8 0.2 0.6"/>
+                <body name="jaw" pos="-0.0202 -0.0244 0" quat="0 0 1 0">
+                  <inertial pos="-0.00161745 -0.0303473 0.000449646" mass="0.0202444" diaginertia="1.11265e-05 8.99651e-06 2.99548e-06" />
+                  <joint name="gripper" type="hinge" range="-0.2 2.0" axis="0 0 1" class="sts3215" />
+                  <geom name="jaw_visual" type="mesh" mesh="jaw_Moving_Jaw" material="3d_printed" class="visual" />
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <asset>
+    <material name="3d_printed" rgba="0 0 0.45 1.0" />
+    <material name="sts3215" rgba="0.1 0.1 0.1 1.0" />
+    <mesh name="collision_Base" file="Base.stl" />
+    <mesh name="base_Base" file="Base.stl" />
+    <mesh name="base_Base_Motor" file="Base_Motor.stl" />
+    <mesh name="collision_Rotation_Pitch" file="Rotation_Pitch.stl" />
+    <mesh name="shoulder_Rotation_Pitch" file="Rotation_Pitch.stl" />
+    <mesh name="shoulder_Rotation_Pitch_Motor" file="Rotation_Pitch_Motor.stl" />
+    <mesh name="collision_Upper_Arm" file="Upper_Arm.stl" />
+    <mesh name="upper_arm_Upper_Arm" file="Upper_Arm.stl" />
+    <mesh name="upper_arm_Upper_Arm_Motor" file="Upper_Arm_Motor.stl" />
+    <mesh name="collision_Lower_Arm" file="Lower_Arm.stl" />
+    <mesh name="lower_arm_Lower_Arm" file="Lower_Arm.stl" />
+    <mesh name="lower_arm_Lower_Arm_Motor" file="Lower_Arm_Motor.stl" />
+    <mesh name="collision_Wrist_Pitch_Roll" file="Wrist_Pitch_Roll.stl" />
+    <mesh name="wrist_Wrist_Pitch_Roll" file="Wrist_Pitch_Roll.stl" />
+    <mesh name="wrist_Wrist_Pitch_Roll_Motor" file="Wrist_Pitch_Roll_Motor.stl" />
+    <mesh name="gripper_Fixed_Jaw" file="Fixed_Jaw.stl" />
+    <mesh name="gripper_Fixed_Jaw_Motor" file="Fixed_Jaw_Motor.stl" />
+    <mesh name="jaw_Moving_Jaw" file="Moving_Jaw.stl" />
+    <texture type="skybox" file="desert.png" gridsize="3 4" gridlayout=".U..LFRB.D.."/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.3 0.3 0.3" rgb2="0.25 0.25 0.25" markrgb="0.1 0.1 0.1" width="300" height="300" />
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="2 2" reflectance="0.3" />
+    <material name="default_mtl" specular="0.5" shininess="0.5" rgba="1 1 1 1.0"/>
+    <material name="shiny_black" specular="0.12999999523163" shininess="0.07" rgba="0.0599999986589 0.0599999986589 0.0599999986589 1.0"/>
+  </asset>
+
+  <actuator>
+    <position class="sts3215" name="shoulder_pan" joint="shoulder_pan" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <position class="sts3215" name="shoulder_lift" joint="shoulder_lift" forcerange="-3.35 3.35" ctrlrange="0 3.5"/>
+    <position class="sts3215" name="elbow_flex" joint="elbow_flex" forcerange="-3.35 3.35" ctrlrange="-3.14158 0"/>
+    <position class="sts3215" name="wrist_flex" joint="wrist_flex" forcerange="-3.35 3.35" ctrlrange="2.5 1.2"/>
+    <position class="sts3215" name="wrist_roll" joint="wrist_roll" forcerange="-3.35 3.35" ctrlrange="-3.14158 3.14158"/>
+    <position class="sts3215" name="gripper" joint="gripper" forcerange="-3.35 3.35" ctrlrange="-0.2 2.0"/>
+  </actuator>
+
+  <visual>
+    <rgba haze="0.15 0.25 0.35 1" />
+  </visual>
+</mujoco>

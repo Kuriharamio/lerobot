@@ -34,23 +34,24 @@ from .common.mujoco_utils import (
     step,
     forward,
 )
-from .config_so101_mujoco import (
-    SO101_GRIPPER_NAME,
-    SO101_JOINT_NAMES,
-    SO101MujocoRobotConfig,
+from .common.rpc_server import JointStateRPCServer
+from .config_so100_mujoco import (
+    SO100_GRIPPER_NAME,
+    SO100_JOINT_NAMES,
+    SO100MujocoRobotConfig,
     make_ee_delta_action_features,
     make_joint_observation,
 )
 
 
-LOGGER = logging.getLogger("so101_mujoco_robot")
+LOGGER = logging.getLogger("so100_mujoco_robot")
 
 
-class SO101MujocoRobot(Robot):
-    config_class = SO101MujocoRobotConfig
-    name = "so101_mujoco"
+class SO100MujocoRobot(Robot):
+    config_class = SO100MujocoRobotConfig
+    name = "so100_mujoco"
 
-    def __init__(self, config: SO101MujocoRobotConfig):
+    def __init__(self, config: SO100MujocoRobotConfig):
         super().__init__(config)
         self.config = config
         self._connected = False
@@ -71,11 +72,13 @@ class SO101MujocoRobot(Robot):
         }
         self._lock = threading.Lock()
         self._sim_thread: threading.Thread | None = None
+        self._publisher_thread: threading.Thread | None = None
+        self._rpc_server: JointStateRPCServer | None = None
         self._stop_event = threading.Event()
 
     @cached_property
     def observation_features(self) -> dict[str, type]:
-        return {f"{joint}.pos": float for joint in SO101_JOINT_NAMES}
+        return {f"{joint}.pos": float for joint in SO100_JOINT_NAMES}
 
     @cached_property
     def action_features(self) -> dict[str, type]:
@@ -90,7 +93,7 @@ class SO101MujocoRobot(Robot):
         if self._connected:
             return
 
-        LOGGER.info("Initializing internal MuJoCo simulation for SO101 robot")
+        LOGGER.info("Initializing internal MuJoCo simulation for SO100 robot")
         self._mujoco_context = make_mujoco_context(
             xml_path=self.config.xml_path,
         )
@@ -122,8 +125,20 @@ class SO101MujocoRobot(Robot):
         self._stop_event.clear()
         self._sim_thread = threading.Thread(target=self._simulation_loop, daemon=True)
         self._sim_thread.start()
+
+        if self.config.rpc_enabled:
+            self._rpc_server = JointStateRPCServer(host=self.config.rpc_host, port=self.config.rpc_port)
+            self._rpc_server.start()
+            self._publisher_thread = threading.Thread(target=self._publish_joint_state_loop, daemon=True)
+            self._publisher_thread.start()
+            LOGGER.info(
+                "SO100 MuJoCo joint-state RPC server started at %s:%s",
+                self.config.rpc_host,
+                self.config.rpc_port,
+            )
+
         self._connected = True
-        LOGGER.info("SO101 MuJoCo internal simulation started")
+        LOGGER.info("SO100 MuJoCo internal simulation started")
 
     @property
     def is_calibrated(self) -> bool:
@@ -141,11 +156,11 @@ class SO101MujocoRobot(Robot):
 
         with self._lock:
             joint_state = list(self._last_joint_state_rad)
-        if len(joint_state) != len(SO101_JOINT_NAMES):
+        if len(joint_state) != len(SO100_JOINT_NAMES):
             raise RuntimeError("Invalid joint state length from internal simulation backend")
 
         joint_map = {
-            joint_name: float(joint_state[index]) for index, joint_name in enumerate(SO101_JOINT_NAMES)
+            joint_name: float(joint_state[index]) for index, joint_name in enumerate(SO100_JOINT_NAMES)
         }
         return make_joint_observation(joint_map)
 
@@ -167,8 +182,29 @@ class SO101MujocoRobot(Robot):
         if self._sim_thread is not None:
             self._sim_thread.join(timeout=1.0)
             self._sim_thread = None
+        if self._publisher_thread is not None:
+            self._publisher_thread.join(timeout=1.0)
+            self._publisher_thread = None
+        if self._rpc_server is not None:
+            self._rpc_server.stop()
+            self._rpc_server = None
         self._mujoco_context = None
         self._ik_solver = None
+
+    def _publish_joint_state_loop(self) -> None:
+        publish_period_s = 1.0 / max(float(self.config.rpc_publish_hz), 1e-3)
+        while not self._stop_event.is_set():
+            if self._rpc_server is not None:
+                with self._lock:
+                    joint_state = list(self._last_joint_state_rad)
+                if len(joint_state) == len(SO100_JOINT_NAMES):
+                    self._rpc_server.update_joint_state(
+                        {
+                            joint_name: float(joint_state[index])
+                            for index, joint_name in enumerate(SO100_JOINT_NAMES)
+                        }
+                    )
+            time.sleep(publish_period_s)
 
     def _simulation_loop(self) -> None:
         with mujoco.viewer.launch_passive(
@@ -206,16 +242,14 @@ class SO101MujocoRobot(Robot):
             return action
 
     def _step_once(self) -> None:
-        # Detect MuJoCo simulation reset (e.g. user pressed reset in the viewer).
         current_time = float(self._mujoco_context.data.time)
         if current_time < self._last_sim_time or (current_time == 0.0 and self._last_sim_time > 0.0):
-            LOGGER.info("MuJoCo simulation reset detected, realigning mocap to end-effector.")
+            LOGGER.info("MuJoCo simulation reset.")
             align_mocap_to_end_effector(
                 self._mujoco_context,
                 self._ik_solver.mocap_id,
                 self._ik_solver.site_id,
             )
-            # Re-sync IK solver and internal joint state with the reset simulation.
             self._ik_solver.reset()
             self._target_position_xyz, self._target_quaternion_wxyz = get_mocap_pose(
                 self._mujoco_context,
@@ -259,7 +293,7 @@ class SO101MujocoRobot(Robot):
         set_mocap_color(self._mujoco_context, self._ik_solver.mocap_box_id, ik_success)
         next_joint_state = list(next_joint_state)
 
-        gripper_index = SO101_JOINT_NAMES.index(SO101_GRIPPER_NAME)
+        gripper_index = SO100_JOINT_NAMES.index(SO100_GRIPPER_NAME)
         gripper_mode = float(action.get("gripper", 1.0))
         if gripper_mode < 0.5:
             next_joint_state[gripper_index] -= float(self.config.gripper_step_rad)
@@ -294,4 +328,4 @@ class SO101MujocoRobot(Robot):
         }
 
 
-__all__ = ["SO101MujocoRobot"]
+__all__ = ["SO100MujocoRobot"]

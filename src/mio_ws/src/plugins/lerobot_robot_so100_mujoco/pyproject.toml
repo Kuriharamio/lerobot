@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_robot_so100_mujoco"
+version = "0.1.0"
+description = "LeRobot installable plugin for SO100 MuJoCo robot"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "lerobot",
+    "mujoco>=3.3.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = [
+    "lerobot_robot_so100_mujoco*",
+]

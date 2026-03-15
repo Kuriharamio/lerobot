@@ -469,6 +469,12 @@ def make_policy(
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     if not cfg.input_features:
         cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
+
+    logging.info(
+        "Policy features: input_features=%s output_features=%s",
+        {k: (v.type.value, v.shape) for k, v in cfg.input_features.items()},
+        {k: (v.type.value, v.shape) for k, v in cfg.output_features.items()},
+    )
     kwargs["config"] = cfg
 
     # Pass dataset_stats to the policy if available (needed for some policies like SARM)

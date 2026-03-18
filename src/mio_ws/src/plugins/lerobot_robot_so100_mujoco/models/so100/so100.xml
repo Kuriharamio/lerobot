@@ -1,16 +1,11 @@
 <mujoco model="so100">
   <compiler angle="radian" meshdir="assets" texturedir="assets" autolimits="true"/>
+  <option integrator="implicitfast" impratio="50" cone="elliptic" noslip_iterations="3"/>
 
   <default>
     <default class="so100">
       <joint damping="1" frictionloss="0.1" armature="0.005"/>
       <position kp="50"/>
-      <default class="visual">
-        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
-      </default>
-      <default class="collision">
-        <geom group="3"/>
-      </default>
     </default>
     <default class="sts3215">
       <geom contype="0" conaffinity="0"/>
@@ -20,6 +15,15 @@
     <default class="backlash">
       <joint damping="0.01" frictionloss="0" armature="0.01" limited="true" range="-0.008726646259971648 0.008726646259971648"/>
     </default>
+    <default class="visual">
+      <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+    </default>
+    <default class="collision">
+      <geom condim="4" contype="1" conaffinity="1" priority="1" group="3" solref="0.001 1" solimp="0.9 0.95 0.001" friction="4 0.8 0.01"/>
+    </default>
+    <default class="collision_robot">
+      <geom condim="4" contype="2" conaffinity="1" priority="1" group="3" solref="0.01 1" solimp="0.9 0.95 0.001" friction="4 0.8 0.01" />
+    </default>
   </default>
 
   <worldbody>
@@ -28,11 +32,23 @@
     <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane" material="groundplane" />
     <!-- Table -->
     <body name="table_base" pos="0 0 0" >
-      <geom name="table_top" type="box" size="0.6 0.4 0.02" pos="0 0 0.35" material="default_mtl"/>
-      <geom name="table_leg1" type="cylinder" size="0.03 0.17" pos="0.5 0.3 0.17" material="shiny_black"/>
-      <geom name="table_leg2" type="cylinder" size="0.03 0.17" pos="-0.5 0.3 0.17" material="shiny_black"/>
-      <geom name="table_leg3" type="cylinder" size="0.03 0.17" pos="0.5 -0.3 0.17" material="shiny_black"/>
-      <geom name="table_leg4" type="cylinder" size="0.03 0.17" pos="-0.5 -0.3 0.17" material="shiny_black"/>
+      <geom name="table_top_visual" type="box" size="0.6 0.4 0.02" pos="0 0 0.35" material="default_mtl" class="visual"/>
+      <geom name="table_leg1_visual" type="cylinder" size="0.03 0.17" pos="0.5 0.3 0.17" material="shiny_black" class="visual"/>
+      <geom name="table_leg2_visual" type="cylinder" size="0.03 0.17" pos="-0.5 0.3 0.17" material="shiny_black" class="visual"/>
+      <geom name="table_leg3_visual" type="cylinder" size="0.03 0.17" pos="0.5 -0.3 0.17" material="shiny_black" class="visual"/>
+      <geom name="table_leg4_visual" type="cylinder" size="0.03 0.17" pos="-0.5 -0.3 0.17" material="shiny_black" class="visual"/>
+      <geom name="table_top_collision" type="box" size="0.6 0.4 0.02" pos="0 0 0.35" class="collision"/>
+      <geom name="table_leg1_collision" type="cylinder" size="0.03 0.17" pos="0.5 0.3 0.17" class="collision"/>
+      <geom name="table_leg2_collision" type="cylinder" size="0.03 0.17" pos="-0.5 0.3 0.17" class="collision"/>
+      <geom name="table_leg3_collision" type="cylinder" size="0.03 0.17" pos="0.5 -0.3 0.17" class="collision"/>
+      <geom name="table_leg4_collision" type="cylinder" size="0.03 0.17" pos="-0.5 -0.3 0.17" class="collision"/>
+    </body>
+    <!-- Object -->
+    <body name="kfs" pos="-0.2 0 0.4">
+      <joint type="free" damping="1e-4"/>
+      <inertial pos="0 0 0" mass="0.05" diaginertia="0.0002 0.0002 0.0002"/>
+      <geom class="visual"  mesh="kfs" material="kfs" />
+      <geom class="collision"  type="box" size="0.03 0.03 0.03"/>
     </body>
     <!-- Arm target mocap -->
     <body name="arm_target" pos="0 0 0" quat="1 0 0 0" mocap="true">
@@ -44,36 +60,81 @@
     </body>
     <!-- Robot -->
     <body name="base" childclass="so100" pos="-0.5 0 0.37" euler="0 0 1.5708">
-      <!-- <geom name="base_collision" type="mesh" mesh="collision_Base" class="collision" /> -->
+      <geom name="base_collision" type="mesh" mesh="collision_Base" class="collision_robot" />
       <geom name="base_visual_0" type="mesh" mesh="base_Base" material="3d_printed" class="visual" />
       <geom name="base_visual_1" type="mesh" mesh="base_Base_Motor" material="sts3215" class="visual" />
       <body name="shoulder" pos="0 -0.0452 0.0165" quat="0.7071 0.7071 0 0">
         <inertial pos="-9.07886e-05 0.0590972 0.031089" mass="0.119226" diaginertia="5.94278e-05 5.89975e-05 3.13712e-05" />
         <joint name="shoulder_pan" type="hinge" range="-2 2" axis="0 1 0" class="sts3215" />
-        <geom name="shoulder_collision" type="mesh" mesh="collision_Rotation_Pitch" class="collision" />
+        <geom name="shoulder_collision" type="mesh" mesh="collision_Rotation_Pitch" class="collision_robot" />
         <geom name="shoulder_visual_0" type="mesh" mesh="shoulder_Rotation_Pitch" material="3d_printed" class="visual" />
         <geom name="shoulder_visual_1" type="mesh" mesh="shoulder_Rotation_Pitch_Motor" material="sts3215" class="visual" />
         <body name="upper_arm" pos="0 0.1025 0.0306" quat="0.6216 -0.7833 0 0">
           <inertial pos="-1.72052e-05 0.0701802 0.00310545" mass="0.162409" diaginertia="0.000213312 0.000167164 7.01522e-05" />
           <joint name="shoulder_lift" type="hinge" range="0 3.5" axis="1 0 0" class="sts3215"/>
-          <geom name="upper_arm_collision" type="mesh" mesh="collision_Upper_Arm" class="collision" />
+          <geom name="upper_arm_collision" type="mesh" mesh="collision_Upper_Arm" class="collision_robot" />
           <geom name="upper_arm_visual_0" type="mesh" mesh="upper_arm_Upper_Arm" material="3d_printed" class="visual" />
           <geom name="upper_arm_visual_1" type="mesh" mesh="upper_arm_Upper_Arm_Motor" material="sts3215" class="visual" />
           <body name="lower_arm" pos="0 0.11257 0.028" quat="0.7071 0.7071 0 0">
             <inertial pos="-0.00339604 0.00137796 0.0768007" mass="0.147968" diaginertia="0.000138803 0.000107748 4.84242e-05" />
             <joint name="elbow_flex" type="hinge" range="-3.14158 0" axis="1 0 0" class="sts3215" />
-            <geom name="lower_arm_collision" type="mesh" mesh="collision_Lower_Arm" class="collision" />
+            <geom name="lower_arm_collision" type="mesh" mesh="collision_Lower_Arm" class="collision_robot" />
             <geom name="lower_arm_visual_0" type="mesh" mesh="lower_arm_Lower_Arm" material="3d_printed" class="visual" />
             <geom name="lower_arm_visual_1" type="mesh" mesh="lower_arm_Lower_Arm_Motor" material="sts3215" class="visual" />
             <body name="wrist" pos="0 0.0052 0.1349" quat="0.8776 -0.4794 0 0">
               <inertial pos="-0.00852653 -0.0352279 -2.34622e-05" mass="0.0661321" diaginertia="3.45403e-05 2.39041e-05 1.94704e-05" />
               <joint name="wrist_flex" type="hinge" range="-2.5 1.2" axis="1 0 0" class="sts3215" />
-              <geom name="wrist_collision" type="mesh" mesh="collision_Wrist_Pitch_Roll" class="collision" />
+              <geom name="wrist_collision" type="mesh" mesh="collision_Wrist_Pitch_Roll" class="collision_robot" />
               <geom name="wrist_visual_0" type="mesh" mesh="wrist_Wrist_Pitch_Roll" material="3d_printed" class="visual" />
               <geom name="wrist_visual_1" type="mesh" mesh="wrist_Wrist_Pitch_Roll_Motor" material="sts3215" class="visual" />
               <body name="gripper" pos="0 -0.0601 0" quat="0.7071 0 0.7071 0">
                 <inertial pos="0.00552377 -0.0280167 0.000483583" mass="0.0929859" diaginertia="5.03136e-05 4.64098e-05 2.72961e-05" />
                 <joint name="wrist_roll" type="hinge" range="-3.14158 3.14158" axis="0 1 0" class="sts3215" />
+                <!-- <geom name="gripper_collision" type="mesh" mesh="gripper_Fixed_Jaw" class="collision" /> -->
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_0" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_1" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_2" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_3" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_4" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_5" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_6" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_7" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_8" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_9" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_10" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_11" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_12" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_13" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_14" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_15" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_16" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_17" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_18" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_19" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_20" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_21" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_22" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_23" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_24" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_25" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_26" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_27" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_28" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_29" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_30" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_31" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_32" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_33" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_34" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_35" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_36" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_37" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_38" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_39" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_40" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_41" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_42" />
+                <geom type="mesh" class="collision" mesh="Fixed_Jaw_part_43" />
                 <geom name="gripper_visual_0" type="mesh" mesh="gripper_Fixed_Jaw" material="3d_printed" class="visual" />
                 <geom name="gripper_visual_1" type="mesh" mesh="gripper_Fixed_Jaw_Motor" material="sts3215" class="visual" />
                 <site group="3" name="gripperframe" pos="0.0 -0.1 0.0" euler="0 -1.5708 -1.5708" rgba="0.2 0.8 0.2 0.6"/>
@@ -81,6 +142,31 @@
                   <inertial pos="-0.00161745 -0.0303473 0.000449646" mass="0.0202444" diaginertia="1.11265e-05 8.99651e-06 2.99548e-06" />
                   <joint name="gripper" type="hinge" range="-0.2 2.0" axis="0 0 1" class="sts3215" />
                   <geom name="jaw_visual" type="mesh" mesh="jaw_Moving_Jaw" material="3d_printed" class="visual" />
+                  <!-- <geom name="jaw_collision" type="mesh" mesh="jaw_Moving_Jaw" class="collision" /> -->
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_0" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_1" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_2" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_3" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_4" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_5" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_6" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_7" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_8" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_9" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_10" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_11" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_12" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_13" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_14" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_15" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_16" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_17" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_18" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_19" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_20" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_21" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_22" />
+                  <geom type="mesh" class="collision" mesh="Moving_Jaw_part_23" />
                 </body>
               </body>
             </body>
@@ -116,6 +202,77 @@
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="2 2" reflectance="0.3" />
     <material name="default_mtl" specular="0.5" shininess="0.5" rgba="1 1 1 1.0"/>
     <material name="shiny_black" specular="0.12999999523163" shininess="0.07" rgba="0.0599999986589 0.0599999986589 0.0599999986589 1.0"/>
+    <material name="kfs" specular="0.5" shininess="0.341747925" texture="kfs"/>
+    <texture type="2d" name="kfs" file="redR1KFS.png"/>
+    <mesh name="kfs" file="kfs_01.obj" scale="0.17 0.17 0.17"/>
+    <mesh name="Moving_Jaw_part_0" file="Moving_Jaw/part_0.obj" />
+    <mesh name="Moving_Jaw_part_1" file="Moving_Jaw/part_1.obj" />
+    <mesh name="Moving_Jaw_part_2" file="Moving_Jaw/part_2.obj" />
+    <mesh name="Moving_Jaw_part_3" file="Moving_Jaw/part_3.obj" />
+    <mesh name="Moving_Jaw_part_4" file="Moving_Jaw/part_4.obj" />
+    <mesh name="Moving_Jaw_part_5" file="Moving_Jaw/part_5.obj" />
+    <mesh name="Moving_Jaw_part_6" file="Moving_Jaw/part_6.obj" />
+    <mesh name="Moving_Jaw_part_7" file="Moving_Jaw/part_7.obj" />
+    <mesh name="Moving_Jaw_part_8" file="Moving_Jaw/part_8.obj" />
+    <mesh name="Moving_Jaw_part_9" file="Moving_Jaw/part_9.obj" />
+    <mesh name="Moving_Jaw_part_10" file="Moving_Jaw/part_10.obj" />
+    <mesh name="Moving_Jaw_part_11" file="Moving_Jaw/part_11.obj" />
+    <mesh name="Moving_Jaw_part_12" file="Moving_Jaw/part_12.obj" />
+    <mesh name="Moving_Jaw_part_13" file="Moving_Jaw/part_13.obj" />
+    <mesh name="Moving_Jaw_part_14" file="Moving_Jaw/part_14.obj" />
+    <mesh name="Moving_Jaw_part_15" file="Moving_Jaw/part_15.obj" />
+    <mesh name="Moving_Jaw_part_16" file="Moving_Jaw/part_16.obj" />
+    <mesh name="Moving_Jaw_part_17" file="Moving_Jaw/part_17.obj" />
+    <mesh name="Moving_Jaw_part_18" file="Moving_Jaw/part_18.obj" />
+    <mesh name="Moving_Jaw_part_19" file="Moving_Jaw/part_19.obj" />
+    <mesh name="Moving_Jaw_part_20" file="Moving_Jaw/part_20.obj" />
+    <mesh name="Moving_Jaw_part_21" file="Moving_Jaw/part_21.obj" />
+    <mesh name="Moving_Jaw_part_22" file="Moving_Jaw/part_22.obj" />
+    <mesh name="Moving_Jaw_part_23" file="Moving_Jaw/part_23.obj" />
+    <mesh name="Fixed_Jaw_part_0" file="Fixed_Jaw/part_0.obj" />
+    <mesh name="Fixed_Jaw_part_1" file="Fixed_Jaw/part_1.obj" />
+    <mesh name="Fixed_Jaw_part_2" file="Fixed_Jaw/part_2.obj" />
+    <mesh name="Fixed_Jaw_part_3" file="Fixed_Jaw/part_3.obj" />
+    <mesh name="Fixed_Jaw_part_4" file="Fixed_Jaw/part_4.obj" />
+    <mesh name="Fixed_Jaw_part_5" file="Fixed_Jaw/part_5.obj" />
+    <mesh name="Fixed_Jaw_part_6" file="Fixed_Jaw/part_6.obj" />
+    <mesh name="Fixed_Jaw_part_7" file="Fixed_Jaw/part_7.obj" />
+    <mesh name="Fixed_Jaw_part_8" file="Fixed_Jaw/part_8.obj" />
+    <mesh name="Fixed_Jaw_part_9" file="Fixed_Jaw/part_9.obj" />
+    <mesh name="Fixed_Jaw_part_10" file="Fixed_Jaw/part_10.obj" />
+    <mesh name="Fixed_Jaw_part_11" file="Fixed_Jaw/part_11.obj" />
+    <mesh name="Fixed_Jaw_part_12" file="Fixed_Jaw/part_12.obj" />
+    <mesh name="Fixed_Jaw_part_13" file="Fixed_Jaw/part_13.obj" />
+    <mesh name="Fixed_Jaw_part_14" file="Fixed_Jaw/part_14.obj" />
+    <mesh name="Fixed_Jaw_part_15" file="Fixed_Jaw/part_15.obj" />
+    <mesh name="Fixed_Jaw_part_16" file="Fixed_Jaw/part_16.obj" />
+    <mesh name="Fixed_Jaw_part_17" file="Fixed_Jaw/part_17.obj" />
+    <mesh name="Fixed_Jaw_part_18" file="Fixed_Jaw/part_18.obj" />
+    <mesh name="Fixed_Jaw_part_19" file="Fixed_Jaw/part_19.obj" />
+    <mesh name="Fixed_Jaw_part_20" file="Fixed_Jaw/part_20.obj" />
+    <mesh name="Fixed_Jaw_part_21" file="Fixed_Jaw/part_21.obj" />
+    <mesh name="Fixed_Jaw_part_22" file="Fixed_Jaw/part_22.obj" />
+    <mesh name="Fixed_Jaw_part_23" file="Fixed_Jaw/part_23.obj" />
+    <mesh name="Fixed_Jaw_part_24" file="Fixed_Jaw/part_24.obj" />
+    <mesh name="Fixed_Jaw_part_25" file="Fixed_Jaw/part_25.obj" />
+    <mesh name="Fixed_Jaw_part_26" file="Fixed_Jaw/part_26.obj" />
+    <mesh name="Fixed_Jaw_part_27" file="Fixed_Jaw/part_27.obj" />
+    <mesh name="Fixed_Jaw_part_28" file="Fixed_Jaw/part_28.obj" />
+    <mesh name="Fixed_Jaw_part_29" file="Fixed_Jaw/part_29.obj" />
+    <mesh name="Fixed_Jaw_part_30" file="Fixed_Jaw/part_30.obj" />
+    <mesh name="Fixed_Jaw_part_31" file="Fixed_Jaw/part_31.obj" />
+    <mesh name="Fixed_Jaw_part_32" file="Fixed_Jaw/part_32.obj" />
+    <mesh name="Fixed_Jaw_part_33" file="Fixed_Jaw/part_33.obj" />
+    <mesh name="Fixed_Jaw_part_34" file="Fixed_Jaw/part_34.obj" />
+    <mesh name="Fixed_Jaw_part_35" file="Fixed_Jaw/part_35.obj" />
+    <mesh name="Fixed_Jaw_part_36" file="Fixed_Jaw/part_36.obj" />
+    <mesh name="Fixed_Jaw_part_37" file="Fixed_Jaw/part_37.obj" />
+    <mesh name="Fixed_Jaw_part_38" file="Fixed_Jaw/part_38.obj" />
+    <mesh name="Fixed_Jaw_part_39" file="Fixed_Jaw/part_39.obj" />
+    <mesh name="Fixed_Jaw_part_40" file="Fixed_Jaw/part_40.obj" />
+    <mesh name="Fixed_Jaw_part_41" file="Fixed_Jaw/part_41.obj" />
+    <mesh name="Fixed_Jaw_part_42" file="Fixed_Jaw/part_42.obj" />
+    <mesh name="Fixed_Jaw_part_43" file="Fixed_Jaw/part_43.obj" />
   </asset>
 
   <actuator>
@@ -124,7 +281,7 @@
     <position class="sts3215" name="elbow_flex" joint="elbow_flex" forcerange="-3.35 3.35" ctrlrange="-3.14158 0"/>
     <position class="sts3215" name="wrist_flex" joint="wrist_flex" forcerange="-3.35 3.35" ctrlrange="2.5 1.2"/>
     <position class="sts3215" name="wrist_roll" joint="wrist_roll" forcerange="-3.35 3.35" ctrlrange="-3.14158 3.14158"/>
-    <position class="sts3215" name="gripper" joint="gripper" forcerange="-3.35 3.35" ctrlrange="-0.2 2.0"/>
+    <position class="sts3215" name="gripper" joint="gripper" forcerange="-10.35 10.35" ctrlrange="-0.2 2.0"/>
   </actuator>
 
   <visual>

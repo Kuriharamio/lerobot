@@ -182,8 +182,8 @@ def load_policy(device_override: str | None = None):
     # Disable AOT compilation — irrelevant for offline benchmarking
     policy_cfg.compile_model = False
 
-    # Disable RTC: pi0, pi05, and pi0_fast all assert RTC is off in select_action
-    policy_cfg.rtc_config.enabled = False
+    # # Disable RTC: pi0, pi05, and pi0_fast all assert RTC is off in select_action
+    # policy_cfg.rtc_config.enabled = False
 
     # Step 3 : build features from dataset metadata
     dataset = LeRobotDataset(

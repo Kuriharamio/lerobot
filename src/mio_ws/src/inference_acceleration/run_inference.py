@@ -58,6 +58,10 @@ _DEFAULT_DATASET_ROOT = WORKSPACE / "src" / "mio_ws" / "datasets" / "libero"
 _DEFAULT_OUTPUT_DIR = Path(__file__).parent / "results"
 _EPISODE_INDEX = 0
 _DOWNLOAD_VIDEOS = False
+_OBS_IMAGE_KEY_1 = "observation.images.image"
+_OBS_IMAGE_KEY_2 = "observation.images.image2"
+_OBS_IMAGE_KEY_EMPTY = "observation.images.empty_camera_0"
+_OBS_STATE_KEY = "observation.state"
 
 RUNNING_MEAN_WINDOW = 10
 N_WARMUP_DEFAULT = 5
@@ -94,7 +98,6 @@ def _parse_args() -> argparse.Namespace:
 MODEL_ID_OR_PATH: str
 RESULTS_DIR: Path
 N_WARMUP: int
-OBS_KEYS: list[str]
 
 
 def _to_numpy(x: Any) -> np.ndarray:
@@ -134,13 +137,17 @@ def load_episode() -> tuple[list[dict[str, np.ndarray]], np.ndarray, np.ndarray,
     timestamps = np.zeros(frame_limit, dtype=np.float64)
     task = ""
 
-    available_obs_keys = OBS_KEYS
-
     for i in range(frame_limit):
         frame = dataset[i]
+        image_1 = _normalize_obs_layout(_OBS_IMAGE_KEY_1, _to_numpy(frame[_OBS_IMAGE_KEY_1]))
+        image_2 = _normalize_obs_layout(_OBS_IMAGE_KEY_2, _to_numpy(frame[_OBS_IMAGE_KEY_2]))
+        state = _to_numpy(frame[_OBS_STATE_KEY])
+        empty_camera = np.zeros_like(image_1)
         samples.append({
-            k: _normalize_obs_layout(k, _to_numpy(frame[k]))
-            for k in available_obs_keys
+            _OBS_IMAGE_KEY_1: image_1,
+            _OBS_IMAGE_KEY_2: image_2,
+            _OBS_IMAGE_KEY_EMPTY: empty_camera,
+            _OBS_STATE_KEY: state,
         })
         actions.append(_to_numpy(frame["action"]))
         timestamps[i] = float(frame["timestamp"])
@@ -150,8 +157,8 @@ def load_episode() -> tuple[list[dict[str, np.ndarray]], np.ndarray, np.ndarray,
     actions_np = np.stack(actions, axis=0)
     n_frames = frame_limit
     print(f"  Frames     : {n_frames}")
-    print(f"  Obs keys   : {available_obs_keys}")
-    print(f"  State shape: {samples[0]['observation.state'].shape}")
+    print(f"  Obs keys   : [{_OBS_IMAGE_KEY_1}, {_OBS_IMAGE_KEY_2}, {_OBS_IMAGE_KEY_EMPTY}, {_OBS_STATE_KEY}]")
+    print(f"  State shape: {samples[0][_OBS_STATE_KEY].shape}")
     print(f"  Action shape: {actions_np.shape}")
     print(f"  Task       : '{task}'")
     return samples, actions_np, timestamps, task, n_frames
@@ -659,21 +666,17 @@ def plot_results(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    global MODEL_ID_OR_PATH, RESULTS_DIR, N_WARMUP, OBS_KEYS
+    global MODEL_ID_OR_PATH, RESULTS_DIR, N_WARMUP
 
     args = _parse_args()
 
     MODEL_ID_OR_PATH = args.model_id
     N_WARMUP = args.n_warmup
 
-    # 1. Load policy first so observation keys align with policy input features
+    # 1. Load policy
     policy, preprocessor, postprocessor, device, use_amp, task_from_meta = load_policy(
         device_override=args.device,
     )
-    OBS_KEYS = [
-        k for k in policy.config.input_features
-        if k.startswith("observation.")
-    ]
 
     # 2. Load dataset episode
     samples, actions_gt, timestamps, task, n_frames = load_episode()

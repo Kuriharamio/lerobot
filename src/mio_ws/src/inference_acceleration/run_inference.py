@@ -102,10 +102,12 @@ def _to_numpy(x: Any) -> np.ndarray:
         x = x.detach().cpu().numpy()
     elif not isinstance(x, np.ndarray):
         x = np.asarray(x)
+    return x
 
-    # Convert HWC images to CHW for policy preprocessor compatibility.
-    if x.ndim == 3 and x.shape[-1] in (1, 3) and x.shape[0] not in (1, 3):
-        x = np.transpose(x, (2, 0, 1))
+
+def _normalize_obs_layout(name: str, x: np.ndarray) -> np.ndarray:
+    if "image" in name:
+        return np.transpose(x, (1, 2, 0))
     return x
 
 
@@ -126,28 +128,20 @@ def load_episode() -> tuple[list[dict[str, np.ndarray]], np.ndarray, np.ndarray,
     )
 
     frame_limit = len(dataset)
-    if frame_limit <= 0:
-        raise ValueError("No frames found in the selected episode.")
 
     samples: list[dict[str, np.ndarray]] = []
     actions: list[np.ndarray] = []
     timestamps = np.zeros(frame_limit, dtype=np.float64)
     task = ""
 
-    first_frame = dataset[0]
-    available_obs_keys = [k for k in OBS_KEYS if k in first_frame]
-    missing_obs_keys = [k for k in OBS_KEYS if k not in first_frame]
-    if not available_obs_keys:
-        raise KeyError(
-            "None of the policy observation keys were found in dataset sample. "
-            f"Policy keys={OBS_KEYS}, sample keys={list(first_frame.keys())}"
-        )
-    if missing_obs_keys:
-        print(f"  Warning: missing observation keys in dataset sample: {missing_obs_keys}")
+    available_obs_keys = OBS_KEYS
 
     for i in range(frame_limit):
         frame = dataset[i]
-        samples.append({k: _to_numpy(frame[k]) for k in available_obs_keys})
+        samples.append({
+            k: _normalize_obs_layout(k, _to_numpy(frame[k]))
+            for k in available_obs_keys
+        })
         actions.append(_to_numpy(frame["action"]))
         timestamps[i] = float(frame["timestamp"])
         if not task:
@@ -157,8 +151,7 @@ def load_episode() -> tuple[list[dict[str, np.ndarray]], np.ndarray, np.ndarray,
     n_frames = frame_limit
     print(f"  Frames     : {n_frames}")
     print(f"  Obs keys   : {available_obs_keys}")
-    if "observation.state" in samples[0]:
-        print(f"  State shape: {samples[0]['observation.state'].shape}")
+    print(f"  State shape: {samples[0]['observation.state'].shape}")
     print(f"  Action shape: {actions_np.shape}")
     print(f"  Task       : '{task}'")
     return samples, actions_np, timestamps, task, n_frames
@@ -187,12 +180,10 @@ def load_policy(device_override: str | None = None):
         policy_cfg.device = device_override
 
     # Disable AOT compilation — irrelevant for offline benchmarking
-    if hasattr(policy_cfg, "compile_model"):
-        policy_cfg.compile_model = False
+    policy_cfg.compile_model = False
 
     # Disable RTC: pi0, pi05, and pi0_fast all assert RTC is off in select_action
-    if getattr(policy_cfg, "rtc_config", None) is not None:
-        policy_cfg.rtc_config.enabled = False
+    policy_cfg.rtc_config.enabled = False
 
     # Step 3 : build features from dataset metadata
     dataset = LeRobotDataset(
@@ -683,8 +674,6 @@ def main() -> None:
         k for k in policy.config.input_features
         if k.startswith("observation.")
     ]
-    if not OBS_KEYS:
-        raise ValueError("No observation.* keys found in policy input features.")
 
     # 2. Load dataset episode
     samples, actions_gt, timestamps, task, n_frames = load_episode()

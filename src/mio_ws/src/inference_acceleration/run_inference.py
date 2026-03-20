@@ -49,9 +49,9 @@ from lerobot.utils.utils import get_safe_torch_device
 # ── Defaults ────────────────────────────────────────────────────────────────────
 _DEFAULT_MODEL_ID = "lerobot/pi05-libero"
 _SUPPORTED_MODEL_IDS = [
-    "lerobot/pi0fast-libero",
-    "lerobot/pi0-libero",
-    "lerobot/pi05-libero",
+    "lerobot/pi0fast_libero",
+    "lerobot/pi0_libero",
+    "lerobot/pi05_libero",
 ]
 _DEFAULT_DATASET_REPO_ID = "HuggingFaceVLA/libero"
 _DEFAULT_DATASET_ROOT = WORKSPACE / "src" / "mio_ws" / "datasets" / "libero"

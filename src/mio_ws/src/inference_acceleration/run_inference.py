@@ -3,18 +3,16 @@ Offline inference benchmark for pi-series policies (pi0 / pi05 / pi0_fast).
 
 Usage
 ─────
-# use the default pi05 checkpoint in src/mio_ws/checkpoint/
+# use default model (lerobot/pi05-libero) + dataset (HuggingFaceVLA/libero)
 python src/mio_ws/src/inference_acceleration/run_inference.py
 
-# explicit checkpoint path (pi0, pi05, or pi0_fast all work the same way)
+# explicit model
 python src/mio_ws/src/inference_acceleration/run_inference.py \\
-    --checkpoint /path/to/pi0/checkpoint
+    --model-id lerobot/pi0fast-libero
 
 # full options
 python src/mio_ws/src/inference_acceleration/run_inference.py \\
-    --checkpoint /path/to/pi0_fast/checkpoint \\
-    --data-dir   src/mio_ws/data/episode_000 \\
-    --output-dir src/mio_ws/src/inference_acceleration/results/pi0_fast \\
+    --model-id lerobot/pi0-libero \\
     --n-warmup   5 \\
     --device     cuda
 
@@ -24,7 +22,7 @@ Why all three policies work without policy-specific code
   so that `select_action` (the code path used by lerobot_record.py) can run.
 • All three use `_action_queue` (a collections.deque) for action chunking.
 • `make_policy` and `make_pre_post_processors` dispatch on `config.type`
-  automatically; we pass the checkpoint path and dataset metadata.
+  automatically; we pass the pretrained model id/path and dataset metadata.
 """
 
 import argparse
@@ -33,26 +31,33 @@ import time
 from contextlib import nullcontext
 from copy import copy
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-WORKSPACE = Path(__file__).resolve().parents[4]  # …/lerobot
-sys.path.insert(0, str(WORKSPACE / "src"))
+WORKSPACE = Path(__file__).resolve().parents[4]
 
-from lerobot.configs.policies import PreTrainedConfig  # noqa: E402
-from lerobot.datasets.lerobot_dataset import LeRobotDataset  # noqa: E402
-from lerobot.policies.factory import make_policy, make_pre_post_processors  # noqa: E402
-from lerobot.policies.utils import prepare_observation_for_inference  # noqa: E402
-from lerobot.processor.rename_processor import rename_stats  # noqa: E402
-from lerobot.utils.utils import get_safe_torch_device  # noqa: E402
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.policies.factory import make_policy, make_pre_post_processors
+from lerobot.policies.utils import prepare_observation_for_inference
+from lerobot.processor.rename_processor import rename_stats
+from lerobot.utils.utils import get_safe_torch_device
 
-# ── Default paths (overridable via CLI) ────────────────────────────────────────
-_DEFAULT_CHECKPOINT  = WORKSPACE / "src" / "mio_ws" / "checkpoint"
-_DEFAULT_DATASET_ROOT = WORKSPACE / "datas" / "cube2basket" / "20260307203505_100"
-_DEFAULT_DATA_DIR    = WORKSPACE / "src" / "mio_ws" / "data" / "episode_000"
-_DEFAULT_OUTPUT_DIR  = Path(__file__).parent / "results"
+# ── Defaults ────────────────────────────────────────────────────────────────────
+_DEFAULT_MODEL_ID = "lerobot/pi05-libero"
+_SUPPORTED_MODEL_IDS = [
+    "lerobot/pi0fast-libero",
+    "lerobot/pi0-libero",
+    "lerobot/pi05-libero",
+]
+_DEFAULT_DATASET_REPO_ID = "HuggingFaceVLA/libero"
+_DEFAULT_DATASET_ROOT = WORKSPACE / "src" / "mio_ws" / "datasets" / "libero"
+_DEFAULT_OUTPUT_DIR = Path(__file__).parent / "results"
+_EPISODE_INDEX = 0
+_DOWNLOAD_VIDEOS = False
 
 RUNNING_MEAN_WINDOW = 10
 N_WARMUP_DEFAULT = 5
@@ -66,27 +71,11 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "-c", "--checkpoint",
-        type=Path, default=_DEFAULT_CHECKPOINT,
-        help="Path to the policy checkpoint directory (pi0, pi05, or pi0_fast).",
-    )
-    p.add_argument(
-        "--dataset-root",
-        type=Path, default=_DEFAULT_DATASET_ROOT,
-        help="Root directory of the LeRobot dataset.",
-    )
-    p.add_argument(
-        "--data-dir",
-        type=Path, default=_DEFAULT_DATA_DIR,
-        help="Directory containing the pre-extracted episode numpy arrays.",
-    )
-    p.add_argument(
-        "--output-dir",
-        type=Path, default=None,
-        help=(
-            "Where to save plots.  Defaults to "
-            "<script_dir>/results/<policy_type>."
-        ),
+        "-m", "--model-id",
+        type=str,
+        default=_DEFAULT_MODEL_ID,
+        choices=_SUPPORTED_MODEL_IDS,
+        help="Policy repo id on Hugging Face Hub.",
     )
     p.add_argument(
         "--n-warmup",
@@ -96,50 +85,90 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--device",
         type=str, default=None,
-        help="Override the device in the checkpoint config (e.g. 'cpu', 'cuda').",
+        help="Override the device in the model config (e.g. 'cpu', 'cuda').",
     )
     return p.parse_args()
 
 
 # Module-level variables populated by main() before the rest of the code runs.
-CHECKPOINT: Path
-DATASET_ROOT: Path
-DATA_DIR: Path
+MODEL_ID_OR_PATH: str
 RESULTS_DIR: Path
 N_WARMUP: int
-CAM_KEYS: dict[str, Path]
+OBS_KEYS: list[str]
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+def _to_numpy(x: Any) -> np.ndarray:
+    if isinstance(x, torch.Tensor):
+        x = x.detach().cpu().numpy()
+    elif not isinstance(x, np.ndarray):
+        x = np.asarray(x)
 
-def load_episode() -> tuple[np.ndarray, np.ndarray, np.ndarray,
-                            dict[str, np.ndarray], str, int]:
-    """Load the pre-extracted episode-0 numpy arrays from DATA_DIR."""
+    # Convert HWC images to CHW for policy preprocessor compatibility.
+    if x.ndim == 3 and x.shape[-1] in (1, 3) and x.shape[0] not in (1, 3):
+        x = np.transpose(x, (2, 0, 1))
+    return x
+
+
+# ── Data loading ───────────────────────────────────────────────────────────────
+
+def load_episode() -> tuple[list[dict[str, np.ndarray]], np.ndarray, np.ndarray, str, int]:
+    """Load one episode from LeRobotDataset and convert frames to numpy dicts."""
     print("=" * 60)
-    print("Loading episode data …")
-    print(f"  Data dir   : {DATA_DIR}")
-    states     = np.load(DATA_DIR / "observation.state.npy")  # (N, 16)
-    actions    = np.load(DATA_DIR / "action.npy")             # (N, 16)
-    timestamps = np.load(DATA_DIR / "timestamps.npy")         # (N,)
-    task       = (DATA_DIR / "task.txt").read_text().strip()
+    print("Loading dataset episode …")
+    print(f"  Dataset    : {_DEFAULT_DATASET_REPO_ID}")
+    print(f"  Root       : {_DEFAULT_DATASET_ROOT}")
+    print(f"  Episode    : {_EPISODE_INDEX}")
+    dataset = LeRobotDataset(
+        repo_id=_DEFAULT_DATASET_REPO_ID,
+        root=_DEFAULT_DATASET_ROOT,
+        episodes=[_EPISODE_INDEX],
+        download_videos=_DOWNLOAD_VIDEOS,
+    )
 
-    cameras: dict[str, np.ndarray] = {}
-    for key, path in CAM_KEYS.items():
-        cameras[key] = np.load(path)   # (N, C, H, W)
+    frame_limit = len(dataset)
+    if frame_limit <= 0:
+        raise ValueError("No frames found in the selected episode.")
 
-    n_frames = states.shape[0]
+    samples: list[dict[str, np.ndarray]] = []
+    actions: list[np.ndarray] = []
+    timestamps = np.zeros(frame_limit, dtype=np.float64)
+    task = ""
+
+    first_frame = dataset[0]
+    available_obs_keys = [k for k in OBS_KEYS if k in first_frame]
+    missing_obs_keys = [k for k in OBS_KEYS if k not in first_frame]
+    if not available_obs_keys:
+        raise KeyError(
+            "None of the policy observation keys were found in dataset sample. "
+            f"Policy keys={OBS_KEYS}, sample keys={list(first_frame.keys())}"
+        )
+    if missing_obs_keys:
+        print(f"  Warning: missing observation keys in dataset sample: {missing_obs_keys}")
+
+    for i in range(frame_limit):
+        frame = dataset[i]
+        samples.append({k: _to_numpy(frame[k]) for k in available_obs_keys})
+        actions.append(_to_numpy(frame["action"]))
+        timestamps[i] = float(frame["timestamp"])
+        if not task:
+            task = str(frame.get("task", ""))
+
+    actions_np = np.stack(actions, axis=0)
+    n_frames = frame_limit
     print(f"  Frames     : {n_frames}")
-    print(f"  State shape: {states.shape}")
-    print(f"  Action shape: {actions.shape}")
+    print(f"  Obs keys   : {available_obs_keys}")
+    if "observation.state" in samples[0]:
+        print(f"  State shape: {samples[0]['observation.state'].shape}")
+    print(f"  Action shape: {actions_np.shape}")
     print(f"  Task       : '{task}'")
-    return states, actions, timestamps, cameras, task, n_frames
+    return samples, actions_np, timestamps, task, n_frames
 
 
-# ── Policy loading (mirrors lerobot_record.py lines 506-519) ──────────────────
+# ── Policy loading ─────────────────────────────────────────────────────────────
 
 def load_policy(device_override: str | None = None):
     """
-    Load any pi-series policy (pi0 / pi05 / pi0_fast) from CHECKPOINT.
+    Load any pi-series policy (pi0 / pi05 / pi0_fast) from MODEL_ID_OR_PATH.
 
     All three policy types work identically here because:
       • rtc_config is present on all three — disabled so select_action runs
@@ -147,13 +176,13 @@ def load_policy(device_override: str | None = None):
       • make_policy / make_pre_post_processors dispatch on config.type internally
     """
     print("\nLoading policy …")
-    print(f"  Checkpoint : {CHECKPOINT}")
+    print(f"  Pretrained : {MODEL_ID_OR_PATH}")
 
-    # Step 1-2 (lerobot_record.py): load config, override pretrained_path
-    policy_cfg = PreTrainedConfig.from_pretrained(CHECKPOINT)
-    policy_cfg.pretrained_path = CHECKPOINT
+    # Step 1-2 : load config, override pretrained_path
+    policy_cfg = PreTrainedConfig.from_pretrained(MODEL_ID_OR_PATH)
+    policy_cfg.pretrained_path = MODEL_ID_OR_PATH
 
-    # Apply optional device override (e.g. --device cpu for testing)
+    # Apply optional device override
     if device_override is not None:
         policy_cfg.device = device_override
 
@@ -165,20 +194,21 @@ def load_policy(device_override: str | None = None):
     if getattr(policy_cfg, "rtc_config", None) is not None:
         policy_cfg.rtc_config.enabled = False
 
-    # Step 3 (lerobot_record.py): build features from dataset metadata
+    # Step 3 : build features from dataset metadata
     dataset = LeRobotDataset(
-        repo_id=DATASET_ROOT.name,
-        root=DATASET_ROOT,
-        episodes=[0],
+        repo_id=_DEFAULT_DATASET_REPO_ID,
+        root=_DEFAULT_DATASET_ROOT,
+        episodes=[_EPISODE_INDEX],
+        download_videos=False,
     )
 
-    # make_policy — mirrors lerobot_record.py line 507
+    # make_policy
     policy = make_policy(policy_cfg, ds_meta=dataset.meta)
 
-    # make_pre_post_processors — mirrors lerobot_record.py lines 511-519
+    # make_pre_post_processors
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy_cfg,
-        pretrained_path=CHECKPOINT,
+        pretrained_path=MODEL_ID_OR_PATH,
         dataset_stats=rename_stats(dataset.meta.stats, {}),
         preprocessor_overrides={
             "device_processor": {"device": policy_cfg.device},
@@ -200,17 +230,11 @@ def load_policy(device_override: str | None = None):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _build_obs_np(
-    states: np.ndarray,
-    cameras: dict[str, np.ndarray],
+    samples: list[dict[str, np.ndarray]],
     i: int,
 ) -> dict[str, np.ndarray]:
     """Build the per-frame numpy observation dict consumed by predict_action."""
-    return copy({
-        "observation.state": states[i],
-        "observation.wrist_cam": cameras["observation.wrist_cam"][i],
-        "observation.front_cam": cameras["observation.front_cam"][i],
-        "observation.side_cam": cameras["observation.side_cam"][i],
-    })
+    return copy(samples[i])
 
 
 def _sync(device: torch.device) -> None:
@@ -221,15 +245,14 @@ def _sync(device: torch.device) -> None:
 # ── Warmup ─────────────────────────────────────────────────────────────────────
 
 def warmup(
-    states: np.ndarray,
-    cameras: dict[str, np.ndarray],
+    samples: list[dict[str, np.ndarray]],
     task: str,
     policy,
     preprocessor,
     postprocessor,
     device: torch.device,
     use_amp: bool,
-    n_warmup: int = N_WARMUP,
+    n_warmup: int = N_WARMUP_DEFAULT,
 ) -> None:
     """
     Run n_warmup full inference passes without recording timing.
@@ -253,8 +276,8 @@ def warmup(
     preprocessor.reset()
     postprocessor.reset()
 
-    for i in range(min(n_warmup, states.shape[0])):
-        obs_np = _build_obs_np(states, cameras, i)
+    for i in range(min(n_warmup, len(samples))):
+        obs_np = _build_obs_np(samples, i)
         with torch.inference_mode(), amp_ctx:
             obs = prepare_observation_for_inference(obs_np, device, task)
             obs = preprocessor(obs)
@@ -274,9 +297,8 @@ def warmup(
 # ── Inference loop with fine-grained timing ────────────────────────────────────
 
 def run_inference(
-    states: np.ndarray,
+    samples: list[dict[str, np.ndarray]],
     actions_gt: np.ndarray,
-    cameras: dict[str, np.ndarray],
     task: str,
     policy,
     preprocessor,
@@ -310,7 +332,7 @@ def run_inference(
 
     Returns predicted_actions plus five timing arrays and is_model_call.
     """
-    n_frames = states.shape[0]
+    n_frames = len(samples)
 
     policy.reset()
     preprocessor.reset()
@@ -336,7 +358,7 @@ def run_inference(
     for i in range(n_frames):
         t_step_start = time.perf_counter()
 
-        obs_np = _build_obs_np(states, cameras, i)
+        obs_np = _build_obs_np(samples, i)
 
         with torch.inference_mode(), amp_ctx:
             # ── Sub-step 1: prepare_observation_for_inference ─────────────────
@@ -646,49 +668,40 @@ def plot_results(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    global CHECKPOINT, DATASET_ROOT, DATA_DIR, RESULTS_DIR, N_WARMUP, CAM_KEYS
+    global MODEL_ID_OR_PATH, RESULTS_DIR, N_WARMUP, OBS_KEYS
 
     args = _parse_args()
 
-    # Populate module-level path variables from CLI args
-    CHECKPOINT   = args.checkpoint.resolve()
-    DATASET_ROOT = args.dataset_root.resolve()
-    DATA_DIR     = args.data_dir.resolve()
-    N_WARMUP     = args.n_warmup
+    MODEL_ID_OR_PATH = args.model_id
+    N_WARMUP = args.n_warmup
 
-    # Build camera-key → file-path mapping from DATA_DIR
-    CAM_KEYS = {
-        "observation.wrist_cam": DATA_DIR / "wrist_cam.npy",
-        "observation.front_cam": DATA_DIR / "front_cam.npy",
-        "observation.side_cam":  DATA_DIR / "side_cam.npy",
-    }
-
-    # 1. Load pre-extracted episode data
-    states, actions_gt, timestamps, cameras, task, n_frames = load_episode()
-
-    # 2. Load policy (pi0 / pi05 / pi0_fast all follow the same path)
+    # 1. Load policy first so observation keys align with policy input features
     policy, preprocessor, postprocessor, device, use_amp, task_from_meta = load_policy(
         device_override=args.device,
     )
+    OBS_KEYS = [
+        k for k in policy.config.input_features
+        if k.startswith("observation.")
+    ]
+    if not OBS_KEYS:
+        raise ValueError("No observation.* keys found in policy input features.")
+
+    # 2. Load dataset episode
+    samples, actions_gt, timestamps, task, n_frames = load_episode()
     task = task or task_from_meta
 
-    # Resolve output directory: default to results/<policy_type>/
-    if args.output_dir is not None:
-        RESULTS_DIR = args.output_dir.resolve()
-    else:
-        policy_type = getattr(policy.config, "type", "unknown")
-        RESULTS_DIR = Path(__file__).parent / "results" / policy_type
+    RESULTS_DIR = _DEFAULT_OUTPUT_DIR.resolve()
     print(f"\n  Results dir: {RESULTS_DIR}")
 
     # 3. Warmup
-    warmup(states, cameras, task, policy, preprocessor, postprocessor, device, use_amp,
+    warmup(samples, task, policy, preprocessor, postprocessor, device, use_amp,
            n_warmup=N_WARMUP)
 
     # 4. Benchmark
     (predicted_actions,
      t_prep, t_pre, t_infer, t_post, t_total,
      is_model_call) = run_inference(
-        states, actions_gt, cameras, task,
+        samples, actions_gt, task,
         policy, preprocessor, postprocessor, device, use_amp,
     )
 

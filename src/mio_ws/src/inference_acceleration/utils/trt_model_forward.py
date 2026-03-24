@@ -219,6 +219,6 @@ def _free_pytorch_weights(model, device: torch.device):
         if hasattr(model, attr):
             delattr(model, attr)
 
-    # Keep a sentinel buffer so next(model.parameters()) doesn't raise StopIteration
-    model.register_buffer("_trt_sentinel", torch.zeros(1, device=device))
+    import torch.nn as nn
+    model.register_parameter("_trt_sentinel", nn.Parameter(torch.zeros(1, device=device), requires_grad=False))
     torch.cuda.empty_cache()

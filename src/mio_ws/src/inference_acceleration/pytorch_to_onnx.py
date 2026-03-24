@@ -499,7 +499,7 @@ def export(
 
     _postprocess_onnx(onnx_path, precision, enable_llm_nvfp4)
     print(f"\n✓ Export complete!")
-    print(f"  Next:  bash build_trt_engine.sh -m {model_name} --onnx {onnx_path} --precision {precision}")
+    print(f"  Next:  bash src/mio_ws/src/inference_acceleration/build_trt_engine.sh -m {model_name} --onnx {onnx_path} --precision {precision}")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────

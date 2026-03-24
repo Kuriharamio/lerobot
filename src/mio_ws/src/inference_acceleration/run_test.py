@@ -12,7 +12,7 @@ from lerobot.policies.factory import make_pre_post_processors
 # torch.backends.cuda.matmul.allow_tf32 = True
 # torch.backends.cudnn.allow_tf32 = True
 
-MODEL_CHOICES = ["pi0", "pi05", "pi0fast"]
+MODEL_CHOICES = ["pi0", "pi05"]
 DATASET_REPO_ID = "lerobot/libero"
 EPISODE_INDEX = 0
 parser = argparse.ArgumentParser()

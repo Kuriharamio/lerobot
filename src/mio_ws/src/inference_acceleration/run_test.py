@@ -25,7 +25,7 @@ sys.path.append(WORKSPACE_PATH)
 from utils.action_analysis import action_analysis
 from utils.time_analysis import get_time, time_analysis
 from utils.print_color import print_green, print_yellow, print_red
-from utils.inference_utils import get_policy, format_batch
+from utils.inference_utils import get_policy
 
 WARMUP = True
 PROFILE = True
@@ -36,7 +36,7 @@ def main() -> None:
     output_path = f"{WORKSPACE_PATH}/logs/{args.model}/{args.tag}"
 
     print_green("Load policy...")
-    policy, model_id = get_policy(model=args.model, compile=True, compile_mode="max-autotune", amp=True)
+    policy, model_id = get_policy(model=args.model, compile=True, compile_mode="max-autotune", amp=True, replace_method=True)
     amp_ctx = torch.autocast(device_type=device.type, dtype=torch.bfloat16) if device.type == "cuda" and policy.config.use_amp else nullcontext()
     total_params = sum(p.numel() for p in policy.parameters())
     print_yellow(f"[*] Total Parameters: {total_params / 1e6:.2f} M")

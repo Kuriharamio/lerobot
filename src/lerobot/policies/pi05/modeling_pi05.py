@@ -827,14 +827,9 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         dt = -1.0 / num_steps
 
         x_t = noise
-
-        steps_tensor = torch.arange(num_steps, dtype=torch.float32, device=device)
-        time_schedule = 1.0 + steps_tensor * dt
-
         for step in range(num_steps):
-            # time = 1.0 + step * dt
-            # time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(bsize)
-            time_tensor = time_schedule[step].expand(bsize)
+            time = 1.0 + step * dt
+            time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(bsize)
 
             def denoise_step_partial_call(input_x_t, current_timestep=time_tensor):
                 return self.denoise_step(
@@ -891,10 +886,8 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
-        # past_key_values = copy.deepcopy(past_key_values)
-        from transformers.cache_utils import DynamicCache
-        cloned_data = [(k.clone(), v.clone(), sw) for k, v, sw in past_key_values]
-        past_key_values = DynamicCache(ddp_cache_data=cloned_data)
+        past_key_values = copy.deepcopy(past_key_values)
+        
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,
             position_ids=position_ids,

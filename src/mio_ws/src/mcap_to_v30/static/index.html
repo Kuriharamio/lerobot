@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>MCAP → LeRobot v3.0</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">DATASET CONVERTER</p>
+        <h1>MCAP <span>→</span> LeRobot v3.0</h1>
+      </div>
+      <div class="header-status" id="header-status">
+        <span class="status-dot is-loading"></span>
+        <span>正在解析</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="metadata-section" aria-labelledby="metadata-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">SOURCE OVERVIEW</p>
+            <h2 id="metadata-title">MCAP 元数据</h2>
+          </div>
+          <p class="source-path" id="source-path">—</p>
+        </div>
+        <div class="stat-grid" id="stat-grid" aria-live="polite">
+          <div class="stat-skeleton"></div>
+          <div class="stat-skeleton"></div>
+          <div class="stat-skeleton"></div>
+          <div class="stat-skeleton"></div>
+          <div class="stat-skeleton"></div>
+        </div>
+        <div class="metadata-details" id="metadata-details"></div>
+      </section>
+
+      <section class="mapping-section" aria-labelledby="mapping-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="section-kicker">FEATURE MAPPING</p>
+            <h2 id="mapping-title">数据映射</h2>
+          </div>
+          <div class="selection-count" id="selection-count">已选择 0 项</div>
+        </div>
+
+        <div class="mapping-columns">
+          <section class="data-panel source-panel" aria-labelledby="source-topics-title">
+            <div class="panel-heading">
+              <div>
+                <h3 id="source-topics-title">原始 MCAP 数据</h3>
+                <p id="topic-summary">正在读取 topics</p>
+              </div>
+              <label class="search-box">
+                <span class="visually-hidden">搜索 topic</span>
+                <input id="topic-search" type="search" placeholder="搜索 topic" autocomplete="off" />
+              </label>
+            </div>
+            <div class="topic-list" id="topic-list" aria-live="polite"></div>
+          </section>
+
+          <section class="data-panel target-panel" aria-labelledby="target-features-title">
+            <div class="panel-heading">
+              <div>
+                <h3 id="target-features-title">待导出的 LeRobot 数据</h3>
+                <p id="mapping-summary">尚未创建映射</p>
+              </div>
+            </div>
+            <div class="mapping-list empty" id="mapping-list">
+              <div class="empty-state">
+                <div class="empty-mark">→</div>
+                <p>LeRobot features</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="merge-bar">
+          <div class="selection-preview" id="selection-preview">未选择 topic</div>
+          <div class="merge-controls">
+            <label class="field-control grow">
+              <span>LeRobot 映射名称</span>
+              <input
+                id="mapping-name"
+                type="text"
+                list="mapping-name-options"
+                placeholder="例如 action 或 observation.images.front"
+                autocomplete="off"
+              />
+              <datalist id="mapping-name-options">
+                <option value="action"></option>
+                <option value="observation.state"></option>
+                <option value="observation.images.front"></option>
+                <option value="observation.images.wrist"></option>
+              </datalist>
+            </label>
+            <button class="secondary-button" id="merge-button" type="button" disabled>合并</button>
+          </div>
+          <p class="inline-error" id="mapping-error" role="alert"></p>
+        </div>
+      </section>
+
+      <section class="export-section" aria-labelledby="export-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="section-kicker">EXPORT SETTINGS</p>
+            <h2 id="export-title">导出参数</h2>
+          </div>
+          <span class="version-badge">LeRobotDataset v3.0</span>
+        </div>
+
+        <form id="export-form">
+          <div class="form-grid">
+            <label class="field-control small-field">
+              <span>FPS</span>
+              <input id="fps" name="fps" type="number" min="1" step="1" required />
+            </label>
+            <label class="field-control">
+              <span>Repo ID</span>
+              <input id="repo-id" name="repo_id" type="text" placeholder="user/dataset" required />
+            </label>
+            <label class="field-control wide-field">
+              <span>Root</span>
+              <input id="root" name="root" type="text" placeholder="/path/to/dataset" required />
+            </label>
+            <label class="field-control wide-field">
+              <span>Task</span>
+              <input id="task" name="task" type="text" required />
+            </label>
+            <label class="field-control">
+              <span>Robot type</span>
+              <input id="robot-type" name="robot_type" type="text" placeholder="可选" />
+            </label>
+          </div>
+
+          <div class="export-options">
+            <label class="toggle-row">
+              <input id="use-videos" type="checkbox" checked />
+              <span class="toggle"></span>
+              <span>视频格式</span>
+            </label>
+            <label class="toggle-row">
+              <input id="push-to-hub" type="checkbox" />
+              <span class="toggle"></span>
+              <span>Push to Hub</span>
+            </label>
+            <label class="toggle-row is-dependent" id="private-row">
+              <input id="private" type="checkbox" disabled />
+              <span class="toggle"></span>
+              <span>Private</span>
+            </label>
+            <div class="resolved-path">
+              <span>导出路径</span>
+              <strong id="resolved-path">—</strong>
+            </div>
+          </div>
+
+          <div class="export-progress" id="export-progress" hidden>
+            <div class="progress-copy">
+              <span id="progress-message">正在准备导出</span>
+              <strong id="progress-percent">0%</strong>
+            </div>
+            <div class="progress-track"><div id="progress-bar"></div></div>
+          </div>
+          <p class="export-message" id="export-message" role="status"></p>
+          <button class="primary-button" id="export-button" type="submit" disabled>
+            导出 LeRobot Dataset v3.0
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <template id="topic-template">
+      <button class="topic-row" type="button">
+        <span class="order-box"></span>
+        <span class="topic-copy">
+          <strong class="topic-name"></strong>
+          <small class="topic-schema"></small>
+        </span>
+        <span class="topic-metrics">
+          <span class="shape-value"></span>
+          <span class="fps-value"></span>
+          <span class="frame-value"></span>
+        </span>
+      </button>
+    </template>
+
+    <template id="mapping-template">
+      <article class="mapping-row">
+        <div class="mapping-target-block">
+          <div class="mapping-target"></div>
+          <div class="mapping-shape"></div>
+        </div>
+        <div class="mapping-sources"></div>
+        <button class="remove-button" type="button">移除</button>
+      </article>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

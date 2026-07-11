@@ -43,13 +43,67 @@ class ApplicationState:
         self.source = source.expanduser().resolve()
         self.scan_result: dict[str, Any] | None = None
         self.scan_lock = threading.Lock()
+        self.scan_job: dict[str, Any] = {
+            "state": "idle",
+            "progress": 0,
+            "message": "等待解析",
+            "source": str(self.source),
+        }
         self.job_lock = threading.Lock()
         self.job: dict[str, Any] = {"state": "idle", "progress": 0, "message": "等待导出"}
 
-    def scan(self) -> dict[str, Any]:
+    def scan_status(self) -> dict[str, Any]:
+        should_start = False
+        with self.scan_lock:
+            if self.scan_job["state"] == "idle":
+                self.scan_job = {
+                    **self.scan_job,
+                    "state": "queued",
+                    "progress": 0,
+                    "message": "正在发现 MCAP 文件",
+                }
+                should_start = True
+            status = dict(self.scan_job)
+            if self.scan_result is not None:
+                status["result"] = self.scan_result
+        if should_start:
+            threading.Thread(target=self._run_scan, name="mcap-scan", daemon=True).start()
+        return status
+
+    def _run_scan(self) -> None:
+        self._update_scan({"state": "running", "message": "正在解析 MCAP 数据"})
+        try:
+            result = scan_mcap_source(self.source, self._scan_progress)
+            with self.scan_lock:
+                self.scan_result = result
+                self.scan_job = {
+                    **self.scan_job,
+                    "state": "completed",
+                    "progress": 100,
+                    "message": "MCAP 解析完成",
+                }
+        except Exception as error:
+            logging.exception("MCAP scan failed")
+            self._update_scan(
+                {
+                    "state": "failed",
+                    "message": str(error),
+                    "error": str(error),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+
+    def _scan_progress(self, update: dict[str, Any]) -> None:
+        self._update_scan({"state": "running", **update})
+
+    def _update_scan(self, update: dict[str, Any]) -> None:
+        with self.scan_lock:
+            self.scan_job = {**self.scan_job, **update}
+
+    def require_scan_result(self) -> dict[str, Any]:
         with self.scan_lock:
             if self.scan_result is None:
-                self.scan_result = scan_mcap_source(self.source)
+                raise RuntimeError("MCAP 数据尚未解析完成。")
             return self.scan_result
 
     def start_export(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -58,7 +112,7 @@ class ApplicationState:
         if not isinstance(mappings, list) or not isinstance(parameters, dict):
             raise ValueError("Invalid export request.")
 
-        known_topics = {topic["name"] for topic in self.scan()["topics"]}
+        known_topics = {topic["name"] for topic in self.require_scan_result()["topics"]}
         requested_topics = {
             str(topic)
             for mapping in mappings
@@ -127,7 +181,7 @@ class McapRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/scan":
-            self._handle_json(self.server.state.scan)
+            self._handle_json(self.server.state.scan_status)
             return
         if path == "/api/export/status":
             self._send_json(self.server.state.job_status())

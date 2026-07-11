@@ -28,6 +28,13 @@
           </div>
           <p class="source-path" id="source-path">—</p>
         </div>
+        <div class="scan-progress" id="scan-progress">
+          <div class="progress-copy">
+            <span id="scan-progress-message">正在发现 MCAP 文件</span>
+            <strong id="scan-progress-percent">0%</strong>
+          </div>
+          <div class="progress-track"><div id="scan-progress-bar"></div></div>
+        </div>
         <div class="stat-grid" id="stat-grid" aria-live="polite">
           <div class="stat-skeleton"></div>
           <div class="stat-skeleton"></div>
@@ -35,6 +42,7 @@
           <div class="stat-skeleton"></div>
           <div class="stat-skeleton"></div>
         </div>
+        <div class="scan-diagnostics" id="scan-diagnostics" hidden></div>
         <div class="metadata-details" id="metadata-details"></div>
       </section>
 

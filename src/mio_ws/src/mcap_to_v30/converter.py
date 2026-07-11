@@ -20,6 +20,7 @@ import bisect
 import io
 import logging
 import math
+import re
 import struct
 from collections import defaultdict
 from collections.abc import Callable
@@ -96,7 +97,39 @@ def _topic_kind(schema_name: str) -> str:
     return "unknown"
 
 
-def scan_mcap_source(source: Path) -> dict[str, Any]:
+def _episode_sequence_inventory(source: Path, files: list[Path]) -> dict[str, Any]:
+    if source.is_file():
+        return {"expected_episodes": 1, "missing_episode_paths": []}
+
+    episode_pattern = re.compile(r"^episode_(\d+)$")
+    groups: dict[Path, set[int]] = defaultdict(set)
+    for path in files:
+        match = episode_pattern.match(path.parent.name)
+        if match:
+            groups[path.parent.parent].add(int(match.group(1)))
+
+    missing_paths = []
+    expected_episodes = 0
+    for group, indices in sorted(groups.items()):
+        if not indices:
+            continue
+        first_index = min(indices)
+        last_index = max(indices)
+        expected_episodes += last_index - first_index + 1
+        for index in range(first_index, last_index + 1):
+            if index not in indices:
+                missing = group / f"episode_{index:06d}"
+                missing_paths.append(str(missing.relative_to(source)))
+
+    ungrouped_files = sum(1 for path in files if not episode_pattern.match(path.parent.name))
+    expected_episodes += ungrouped_files
+    return {
+        "expected_episodes": expected_episodes or len(files),
+        "missing_episode_paths": missing_paths,
+    }
+
+
+def scan_mcap_source(source: Path, progress: ProgressCallback | None = None) -> dict[str, Any]:
     try:
         from mcap.reader import make_reader
     except ImportError as err:
@@ -104,6 +137,16 @@ def scan_mcap_source(source: Path) -> dict[str, Any]:
 
     files = discover_mcap_files(source)
     source = source.expanduser().resolve()
+    inventory = _episode_sequence_inventory(source, files)
+    if progress:
+        progress(
+            {
+                "stage": "discover",
+                "message": f"已发现 {len(files)} 个 MCAP 文件",
+                "progress": 2,
+                "files": len(files),
+            }
+        )
     topic_totals: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "frames": 0,
@@ -122,7 +165,19 @@ def scan_mcap_source(source: Path) -> dict[str, Any]:
     first_time_ns: int | None = None
     last_time_ns: int | None = None
 
-    for path in files:
+    for file_index, path in enumerate(files):
+        if progress:
+            display_path = str(path.relative_to(source)) if source.is_dir() else path.name
+            progress(
+                {
+                    "stage": "metadata",
+                    "message": f"正在解析 {display_path}",
+                    "current_file": str(path),
+                    "file": file_index + 1,
+                    "files": len(files),
+                    "progress": round(3 + file_index / len(files) * 89, 1),
+                }
+            )
         per_topic: dict[str, dict[str, Any]] = defaultdict(
             lambda: {"count": 0, "first_ns": None, "last_ns": None}
         )
@@ -198,7 +253,9 @@ def scan_mcap_source(source: Path) -> dict[str, Any]:
                 totals["intervals"] += item["count"] - 1
                 totals["duration_s"] += (item["last_ns"] - item["first_ns"]) * 1e-9
 
-    topic_shapes = _probe_topic_shapes(files, set(topic_totals))
+    if progress:
+        progress({"stage": "shape", "message": "正在探测 topic shape", "progress": 93})
+    topic_shapes = _probe_topic_shapes(files, set(topic_totals), progress=progress)
     topics = []
     for name, totals in sorted(topic_totals.items()):
         fps = totals["intervals"] / totals["duration_s"] if totals["duration_s"] > 0 else 0.0
@@ -240,9 +297,10 @@ def scan_mcap_source(source: Path) -> dict[str, Any]:
     if len(task_variants) == 1:
         task_value = next(iter(task_variants.values()))["value"]
 
-    return {
+    result = {
         "source": str(source),
         "file_count": len(files),
+        "inventory": inventory,
         "total_size_bytes": sum(path.stat().st_size for path in files),
         "total_messages": total_messages,
         "total_duration_s": round(total_duration_s, 3),
@@ -258,6 +316,9 @@ def scan_mcap_source(source: Path) -> dict[str, Any]:
             "task": task_value,
         },
     }
+    if progress:
+        progress({"stage": "done", "message": "MCAP 解析完成", "progress": 100})
+    return result
 
 
 def _message_timestamp_s(message: Any) -> float:
@@ -633,7 +694,9 @@ def _shape_from_value(value: Any) -> list[int]:
     return [int(_flatten_vector(value).shape[0])]
 
 
-def _probe_topic_shapes(files: list[Path], topics: set[str]) -> dict[str, list[int]]:
+def _probe_topic_shapes(
+    files: list[Path], topics: set[str], progress: ProgressCallback | None = None
+) -> dict[str, list[int]]:
     try:
         from mcap.reader import make_reader
     except ImportError:
@@ -648,9 +711,20 @@ def _probe_topic_shapes(files: list[Path], topics: set[str]) -> dict[str, list[i
 
     unresolved = set(topics)
     shapes: dict[str, list[int]] = {}
-    for path in files:
+    for file_index, path in enumerate(files):
         if not unresolved:
             break
+        if progress:
+            progress(
+                {
+                    "stage": "shape",
+                    "message": f"正在探测 shape：{path.name}",
+                    "current_file": str(path),
+                    "file": file_index + 1,
+                    "files": len(files),
+                    "progress": round(93 + file_index / len(files) * 6, 1),
+                }
+            )
         video_samples: dict[str, list[McapSample]] = defaultdict(list)
         failed_topics = set()
         with path.open("rb") as stream:

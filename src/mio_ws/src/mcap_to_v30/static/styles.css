@@ -172,6 +172,42 @@ section + section {
   border-radius: 6px;
 }
 
+.scan-progress {
+  margin-top: 22px;
+  padding: 13px 15px;
+  background: #f7f9f6;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.scan-progress .progress-copy {
+  margin-bottom: 9px;
+}
+
+.scan-diagnostics {
+  margin-top: 14px;
+  padding: 12px 14px;
+  color: #71411f;
+  background: #fff7ec;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid #ead3b7;
+  border-radius: 6px;
+}
+
+.scan-diagnostics strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #603417;
+}
+
+.scan-diagnostics code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #71411f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .stat-item {
   min-height: 84px;
   padding: 17px;

@@ -1,5 +1,6 @@
 const state = {
   scan: null,
+  scanPollTimer: null,
   selectedTopics: [],
   mappings: [],
   exporting: false,
@@ -11,6 +12,11 @@ const elements = {
   sourcePath: document.querySelector("#source-path"),
   statGrid: document.querySelector("#stat-grid"),
   metadataDetails: document.querySelector("#metadata-details"),
+  scanProgress: document.querySelector("#scan-progress"),
+  scanProgressMessage: document.querySelector("#scan-progress-message"),
+  scanProgressPercent: document.querySelector("#scan-progress-percent"),
+  scanProgressBar: document.querySelector("#scan-progress-bar"),
+  scanDiagnostics: document.querySelector("#scan-diagnostics"),
   topicSummary: document.querySelector("#topic-summary"),
   topicSearch: document.querySelector("#topic-search"),
   topicList: document.querySelector("#topic-list"),
@@ -141,6 +147,32 @@ function renderMetadata(groups) {
   });
 }
 
+function updateScanProgress(status) {
+  const progress = Math.max(0, Math.min(100, Number(status.progress) || 0));
+  let message = status.message || "正在解析 MCAP 数据";
+  if (status.file && status.files) message += ` · ${status.file}/${status.files}`;
+  elements.scanProgress.hidden = false;
+  elements.scanProgressMessage.textContent = message;
+  elements.scanProgressPercent.textContent = `${progress.toFixed(progress % 1 ? 1 : 0)}%`;
+  elements.scanProgressBar.style.width = `${progress}%`;
+}
+
+function renderScanDiagnostics(inventory, fileCount) {
+  const missing = inventory?.missing_episode_paths || [];
+  elements.scanDiagnostics.replaceChildren();
+  elements.scanDiagnostics.hidden = missing.length === 0;
+  if (!missing.length) return;
+
+  const title = document.createElement("strong");
+  title.textContent = `Episode 编号存在断档：预计 ${inventory.expected_episodes} 个，找到 ${fileCount} 个 MCAP`;
+  elements.scanDiagnostics.append(title);
+  missing.forEach((path) => {
+    const item = document.createElement("code");
+    item.textContent = `缺少 ${path}/episode.mcap`;
+    elements.scanDiagnostics.append(item);
+  });
+}
+
 function renderTopics() {
   if (!state.scan) return;
   const query = elements.topicSearch.value.trim().toLowerCase();
@@ -266,17 +298,32 @@ function validateExport() {
 async function loadScan() {
   try {
     const response = await fetch("/api/scan");
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "MCAP 解析失败");
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.error || "MCAP 解析失败");
+    elements.sourcePath.textContent = status.source || "—";
+    elements.sourcePath.title = status.source || "";
+    updateScanProgress(status);
+    if (status.state === "failed") throw new Error(status.error || status.message || "MCAP 解析失败");
+    if (status.state !== "completed") {
+      setHeaderStatus("正在解析", "loading");
+      clearTimeout(state.scanPollTimer);
+      state.scanPollTimer = setTimeout(loadScan, 350);
+      return;
+    }
+
+    const payload = status.result;
+    if (!payload) throw new Error("解析完成但未返回 MCAP 结果");
     state.scan = payload;
     elements.sourcePath.textContent = payload.source;
     elements.sourcePath.title = payload.source;
     elements.topicSummary.textContent = `${payload.topics.length} topics · 递归读取 ${payload.file_count} 个文件`;
     renderStats(payload);
+    renderScanDiagnostics(payload.inventory, payload.file_count);
     renderMetadata(payload.metadata);
     renderTopics();
     fillSuggestions(payload.suggestions);
     validateExport();
+    updateScanProgress({progress: 100, message: "MCAP 解析完成"});
     setHeaderStatus("解析完成");
   } catch (error) {
     setHeaderStatus("解析失败", "error");

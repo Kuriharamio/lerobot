@@ -1,0 +1,236 @@
+# ACT 训练配置
+# uv run lerobot-train --config_path=rollio/train_act_open_lid.yaml
+
+dataset:
+  # 数据集标识。设置 root 后，此字段仅作为标识，不会从 Hub 下载数据。
+  repo_id: local/open_lid_v30
+  # 本地 LeRobotDataset v3.0 根目录。设为 null 时从 HF_LEROBOT_HOME/repo_id 查找。
+  root: /home/admin1/ws/Eric/lerobot/rollio/open_lid_v30
+  # 使用的 episode 子集。可选：null 表示全部，或列表，例如 [0, 1, 2]。
+  episodes: null
+  image_transforms:
+    # 是否在训练期间启用随机图像增强。
+    enable: true
+    # 每张图像最多抽取多少种增强。范围：1 到 tfs 中配置的增强数量。
+    max_num_transforms: 4
+    # 是否随机排列抽中的增强顺序。
+    random_order: true
+    # 可用的图像增强池。每种增强按照 weight 无放回抽样。
+    tfs:
+      brightness:
+        # 相对抽样权重；所有非负权重会在内部归一化。
+        weight: 1.0
+        # torchvision.transforms.v2 中的变换类名，或自定义的 SharpnessJitter。
+        type: ColorJitter
+        kwargs:
+          # 随机亮度系数范围；1.0 表示保持原亮度。
+          brightness: [0.8, 1.2]
+      contrast:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          # 随机对比度系数范围；1.0 表示保持原对比度。
+          contrast: [0.8, 1.2]
+      saturation:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          # 随机饱和度系数范围；1.0 表示保持原饱和度。
+          saturation: [0.5, 1.5]
+      hue:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          # 随机色相偏移范围。ColorJitter 的合法范围为 [-0.5, 0.5]。
+          hue: [-0.05, 0.05]
+      sharpness:
+        weight: 1.0
+        type: SharpnessJitter
+        kwargs:
+          # 随机锐度系数范围；1.0 表示保持原锐度。
+          sharpness: [0.5, 1.5]
+      affine:
+        weight: 1.0
+        type: RandomAffine
+        kwargs:
+          # 随机旋转角度范围，单位为度。
+          degrees: [-5.0, 5.0]
+          # 水平和垂直方向的最大平移比例，相对于图像尺寸。
+          translate: [0.05, 0.05]
+  # Hub 数据集的分支、标签或提交哈希。null 表示使用默认版本。
+  revision: null
+  # 是否使用 ImageNet 统计量替换视觉特征的归一化统计量。
+  use_imagenet_stats: true
+  # 视频解码后端。可选：torchcodec、pyav
+  video_backend: torchcodec
+  # 是否以 uint8 返回 RGB 帧，而不是 float32。当前训练加载器内部会主动请求 uint8。
+  return_uint8: false
+  # 深度图解码后的物理单位。可选：mm、m。数据无 depth 时此项不起作用。
+  depth_output_unit: mm
+  # 是否以流式方式读取数据分片。
+  streaming: false
+  # 留作离线损失评估的 episode 比例。范围：[0.0, 1.0)。
+  eval_split: 0.0
+
+policy:
+  type: act
+  # 输入的观测时间步数量。ACT 当前只支持 1。
+  n_obs_steps: 1
+  # 输入特征。空字典表示从数据集 metadata 自动推断图像、状态名称和形状。
+  input_features: {}
+  # 输出特征。空字典表示从数据集 metadata 自动推断 action 名称和形状。
+  output_features: {}
+  # 计算设备。可选：null 自动选择、cuda、cuda:0、cpu、mps。
+  device: cuda
+  # 是否偏好自动混合精度。
+  use_amp: false
+  # 策略是否使用 PEFT 适配器。通常由顶层 peft 配置控制。
+  use_peft: false
+  # 用于微调的本地 checkpoint 或 Hub 模型。null 表示从头初始化 ACT。
+  pretrained_path: null
+  # pretrained_path 指向 Hub 仓库时使用的可选版本。
+  pretrained_revision: null
+  # 每个样本预测并监督的未来 action 数量。正整数。
+  chunk_size: 100
+  # 每次推理调用实际执行的 action 数量。范围：1 到 chunk_size。
+  n_action_steps: 1
+  normalization_mapping:
+    # 图像归一化方式。可选：MEAN_STD、MIN_MAX、IDENTITY、QUANTILES、QUANTILE10。
+    VISUAL: MEAN_STD
+    # 机器人状态归一化方式
+    STATE: MEAN_STD
+    # action 归一化方式
+    ACTION: MEAN_STD
+  # CNN 视觉骨干网络：resnet18、resnet34、resnet50、resnet101、resnet152、dinov3_large、dinov3_tiny、dinov3_small、dinov3_base
+  vision_backbone: resnet18
+  # 视觉骨干网络的预训练权重，必须与 vision_backbone 对应：
+  # - resnet18：ResNet18_Weights.IMAGENET1K_V1、ResNet18_Weights.DEFAULT、null
+  # - resnet34：ResNet34_Weights.IMAGENET1K_V1、ResNet34_Weights.DEFAULT、null
+  # - resnet50：ResNet50_Weights.IMAGENET1K_V1、ResNet50_Weights.IMAGENET1K_V2、
+  #             ResNet50_Weights.DEFAULT、null
+  # - resnet101：ResNet101_Weights.IMAGENET1K_V1、ResNet101_Weights.IMAGENET1K_V2、
+  #              ResNet101_Weights.DEFAULT、null
+  # - resnet152：ResNet152_Weights.IMAGENET1K_V1、ResNet152_Weights.IMAGENET1K_V2、
+  #              ResNet152_Weights.DEFAULT、null
+  # DEFAULT 表示该 backbone 当前推荐的权重：ResNet18/34 对应 V1，ResNet50/101/152 对应 V2。
+  # ResNet 使用 null 时随机初始化；DINOv3 不接受 null，必须填写本地 .pth checkpoint 路径。
+  pretrained_backbone_weights: ResNet18_Weights.IMAGENET1K_V1
+  # 是否用空洞卷积替换骨干网络最后一个 stride。
+  replace_final_stride_with_dilation: false
+  # 可选的骨干网络覆盖项。当前支持以 resnet 或 dinov3 开头的类型；null 使用 vision_backbone。
+  backbone_type: null
+  # Transformer 是否使用前置归一化。
+  pre_norm: false
+  # Transformer embedding 维度，必须能被 n_heads 整除。
+  dim_model: 512
+  # Transformer 注意力头数量。
+  n_heads: 8
+  # Transformer 前馈网络隐藏层维度。
+  dim_feedforward: 3200
+  # 前馈网络激活函数。常用：relu、gelu、glu。
+  feedforward_activation: relu
+  # ACT Transformer 编码器层数。
+  n_encoder_layers: 4
+  # ACT Transformer 解码器层数。
+  n_decoder_layers: 1
+  # 是否启用变分自编码器目标。
+  use_vae: true
+  # VAE 潜变量维度，仅在 use_vae=true 时使用。
+  latent_dim: 32
+  # VAE 编码器的 Transformer 层数，仅在 use_vae=true 时使用。
+  n_vae_encoder_layers: 4
+  # 是否使用离散任务 ID 对 ACT 进行条件控制。
+  use_instruction_conditioning: false
+  # 任务 ID 数量。use_instruction_conditioning=true 时必须填写且不小于 1。
+  instruction_vocab_size: null
+  # 时间集成系数，常用 0.01。null 表示关闭；启用时要求 n_action_steps=1。
+  temporal_ensemble_coeff: 0.01
+  # Dropout 概率。范围：[0.0, 1.0)。
+  dropout: 0.1
+  # VAE KL 散度损失权重。
+  kl_weight: 10.0
+  # ACT 非骨干网络参数的 AdamW 学习率。
+  optimizer_lr: 0.00001
+  # AdamW 权重衰减。
+  optimizer_weight_decay: 0.0001
+  # 视觉骨干网络使用的独立 AdamW 学习率。
+  optimizer_lr_backbone: 0.00001
+  # 是否在训练结束后上传策略到 Hugging Face Hub。默认是 true；设为 false 可免除 Hub 配置。
+  push_to_hub: false
+  # Hub 模型仓库，如 username/act。push_to_hub=true 时必须填写。
+  repo_id: null
+  # Hub 仓库是否私有。可选：true、false、null 使用 Hub 默认值。
+  private: null
+  # 可选的 Hub 标签，例如 [act, airbot]。
+  tags: null
+  # 可选的模型许可证标识，例如 apache-2.0。
+  license: null
+
+# 奖励模型训练配置。null 表示训练 policy，而不是奖励模型。
+reward_model: null
+# 训练输出目录。null 会自动生成 outputs/train/YYYY-MM-DD/HH-MM-SS_act。
+output_dir: null
+# 运行名称。null 时，因为没有环境配置，会自动生成 act。
+job_name: null
+# 是否从 config_path/checkpoint 恢复训练。
+resume: false
+# 模型初始化和数据顺序使用的随机种子。null 表示不显式设置种子。
+seed: 1000
+# 是否强制使用确定性的 cuDNN 算法。true 可提高可复现性，但可能降低速度。
+cudnn_deterministic: false
+# DataLoader worker 进程数量。设为 0 时在主进程中加载数据。
+num_workers: 4
+# 每个进程、每次优化步骤使用的样本数。可逐步增大，直到显存或解码吞吐成为瓶颈。
+batch_size: 8
+# 每个 worker 预取的 batch 数量。仅在 num_workers > 0 时使用。
+prefetch_factor: 4
+# 是否在不同 epoch 之间保留 DataLoader worker。仅在 num_workers > 0 时使用。
+persistent_workers: true
+# 优化器更新总次数。LeRobot 默认值为 100000。
+steps: 100000
+# 训练指标的日志记录间隔，单位为优化步骤。
+log_freq: 200
+# 同步数据帧时允许的时间戳误差，单位为秒。
+tolerance_s: 0.0001
+# 是否在训练期间保存 checkpoint，并保存最终策略。
+save_checkpoint: true
+# checkpoint 保存间隔，单位为优化步骤。
+save_freq: 20000
+# 是否使用 ACT 内置的 AdamW 优化器参数，即 policy.optimizer_* 字段。
+use_policy_training_preset: true
+# 显式优化器配置。使用 ACT preset 时保持 null；其他可选类型包括 adam、adamw、sgd。
+optimizer: null
+# 显式学习率调度器。ACT 默认 preset 不使用调度器。已注册选项包括 diffuser、
+# constant_with_warmup、cosine_annealing_with_warmup、cosine_decay_with_warmup。
+scheduler: null
+# PEFT/LoRA 配置。null 表示完整训练 ACT。启用时可配置 target_modules、
+# full_training_modules、method_type（通常为 LORA）、init_type、r 和 lora_alpha。
+peft: null
+# 是否把每个 checkpoint 上传到 policy.repo_id。启用时要求 policy.repo_id 非空。
+save_checkpoint_to_hub: false
+# 可选的逐样本加权配置，例如 RABC。null 表示关闭样本加权。
+sample_weighting: null
+# 为预训练策略重命名数据集观测字段。空字典表示不重命名。
+rename_map: {}
+# 运行时填入的恢复训练 checkpoint 路径。全新训练时保持 null。
+checkpoint_path: null
+# 可选的仿真环境配置。null 表示关闭环境 rollout 评估。
+env: null
+
+wandb:
+  # 是否启用 Weights & Biases 日志。
+  enable: false
+  # 是否禁止上传 checkpoint artifact，即使已经启用 checkpoint 保存。
+  disable_artifact: false
+  # W&B 项目名称。
+  project: open_lid_act
+  # W&B 团队或用户名。null 表示使用当前登录账号的默认值。
+  entity: ForgeLab
+  # 可选的运行说明。
+  notes: ACT training for open-lid task
+  # 用于恢复的现有 W&B run ID；null 表示创建新运行。
+  run_id: null
+  # W&B 模式。可选：online、offline、disabled、null 使用 W&B 默认值。
+  mode: online
+  # 是否把配置值添加为 W&B 标签。
+  add_tags: true

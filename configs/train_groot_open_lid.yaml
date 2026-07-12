@@ -1,0 +1,211 @@
+# GR00T N1.7 open_lid 训练配置
+# uv run lerobot-train --config_path=configs/train_groot_open_lid.yaml
+#
+# 当前 LeRobot 仅支持 GR00T N1.7；不要把 base_model_path 改成 N1.5。
+
+# =============================================================================
+# 数据集
+# =============================================================================
+dataset:
+  # 本地 AIRBOT open_lid 数据集标识。
+  repo_id: local/open_lid_v30
+  # 本地 LeRobotDataset v3.0 根目录。
+  root: /home/admin1/ws/Eric/lerobot/rollio/open_lid_v30
+  # 只使用指定 episode；null 表示使用全部 episode。 示例：[0, 1, 2, 3]
+  episodes: null
+  # 数据集版本或 Hub commit；null 表示默认分支的当前版本。
+  revision: null
+  # 使用数据集统计信息。GR00T 会在自身处理器中按 q01/q99 统计量归一化状态和动作。
+  use_imagenet_stats: true
+  # 使用 torchcodec 解码三路 AV1 视频。
+  video_backend: torchcodec
+  # false 表示数据集默认返回 float32；训练加载器内部仍会按需要请求 uint8。
+  return_uint8: false
+  # 深度图输出单位；数据集没有深度相机时不生效。可选值：m、mm。
+  depth_output_unit: mm
+  # 流式数据集目前不适合常规本地视频训练。
+  streaming: false
+  # 按 episode 留出的离线验证比例。0.0 表示关闭验证集划分。
+  # 若改成大于 0（如 0.1），同时设置顶层 eval_steps > 0。
+  eval_split: 0.0
+  # 当前关闭随机图像增强；需要提升视觉扰动鲁棒性时可开启。
+  image_transforms:
+    enable: true
+
+    # 每张图最多随机应用多少个变换。
+    max_num_transforms: 4
+
+    # false 表示按下方定义顺序应用抽中的变换。
+    random_order: false
+
+    # 每项 weight 是被抽中的相对权重，不是独立概率。
+    tfs:
+      brightness:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          brightness: [0.7, 1.3]
+      contrast:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          contrast: [0.6, 1.4]
+      saturation:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          saturation: [0.5, 1.5]
+      hue:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          hue: [-0.08, 0.08]
+      sharpness:
+        weight: 1.0
+        type: SharpnessJitter
+        kwargs:
+          sharpness: [0.5, 1.5]
+      affine:
+        weight: 1.0
+        type: RandomAffine
+        kwargs:
+          degrees: [-5.0, 5.0]
+          translate: [0.05, 0.05]
+
+# 不在训练中在线运行仿真环境；真实机器人数据训练通常保持 null。
+env: null
+
+# =============================================================================
+# GR00T N1.7 策略
+# =============================================================================
+policy:
+  type: groot
+  input_features: {}
+  output_features: {}
+  device: cuda
+  # GR00T 使用自己的 BF16 autocast 开关，顶层通用 AMP 保持关闭。
+  use_amp: false
+  # 通用 PEFT 未启用；GR00T 通过下方 tune_* 参数控制微调模块。
+  use_peft: false
+  # GR00T N1.7 官方基础模型。不要使用已移除支持的 N1.5 checkpoint。
+  base_model_path: nvidia/GR00T-N1.7-3B
+  # 作为新机器人进行后训练。
+  embodiment_tag: new_embodiment
+  # 当前时刻使用的历史观测数。N1.7 默认只使用当前观测。
+  n_obs_steps: 1
+  # 每次预测的动作块长度。官方 SO-101/新 embodiment 示例使用 16。
+  chunk_size: 16
+  # 实际执行的动作数量，必须小于或等于 chunk_size。
+  n_action_steps: 16
+  # 状态和动作的最大维数；更短的向量会补零。保持 N1.7 checkpoint 默认值。
+  max_state_dim: 132
+  max_action_dim: 132
+  # 自动选择 embodiment 对应的动作解码变换。
+  # new_embodiment 会解析成无额外变换；libero_sim 会自动使用 libero 变换。
+  action_decode_transform: auto
+  # 关节动作表示为相对当前状态的增量；第 7、14 维名称包含 gripper
+  use_relative_actions: true
+  relative_exclude_joints: [gripper]
+  # 冻结语言模型和视觉塔，以降低显存占用并保护预训练能力。
+  tune_llm: false
+  tune_visual: false
+  # 微调状态/动作投影与动作编解码层（约 3.27 亿参数），以及 VL
+  # LayerNorm/自注意力层（约 2.01 亿参数），总计约 5.29 亿可训练参数。
+  # 冻结约 10.92 亿参数的扩散主干，避免梯度和 AdamW 状态超过单卡显存。
+  tune_projector: true
+  tune_diffusion_model: true
+  tune_vlln: true
+  # 只微调最顶部若干 LLM 层；0 表示不额外解冻。
+  tune_top_llm_layers: 0
+  # 推理时 flow-matching 去噪步数。null 使用 checkpoint 默认值 4。
+  num_inference_timesteps: null
+  # RTC 重叠动作融合斜率。null 使用 checkpoint 默认值 6.0。
+  rtc_ramp_rate: null
+  # 只有安装了与当前 Torch/CUDA 匹配的 flash-attn 后才能设为 true。
+  # 默认 SDPA 数值等价，兼容性更好。
+  use_flash_attention: false
+  # GR00T N1.7 官方微调优化器参数。顶层开启 preset 后会据此创建 AdamW。
+  optimizer_lr: 1.0e-4
+  optimizer_betas: [0.9, 0.999]
+  optimizer_eps: 1.0e-8
+  optimizer_weight_decay: 1.0e-5
+  # 余弦学习率预热比例。100,000 步对应 5,000 个 warmup step。
+  warmup_ratio: 0.05
+  # 计算使用 BF16 autocast。
+  # 关闭 FP32 参数副本可将 31.4 亿模型参数的基础显存占用从约 12.6 GB 降至约 6.9 GB。
+  use_bf16: true
+  model_params_fp32: false
+  # 必须与顶层 steps 一致；GR00T 用它计算 scheduler 的 warmup 步数。
+  max_steps: 100000
+  # 只在本地保存，不上传 Hugging Face Hub。
+  push_to_hub: false
+  repo_id: null
+  private: null
+  # Hub 元数据。
+  tags: [lerobot, groot, groot-n1.7, airbot, open-lid]
+  license: null
+
+# 不训练奖励模型。
+reward_model: null
+
+# =============================================================================
+# 训练流程
+# =============================================================================
+# null 会自动生成带时间戳的目录，目录名后缀为 groot。
+output_dir: null
+job_name: null
+# 从中断的 checkpoint 恢复时设为 true，并通过命令行指定 checkpoint：
+# uv run lerobot-train --config_path=<checkpoint/train_config.json> --resume=true
+resume: false
+# 随机种子；控制初始化、数据打乱和评估环境。
+seed: 1000
+# true 会换取更强复现性，但通常降低约 10%～20% 速度。
+cudnn_deterministic: false
+# 使用 4 个 worker 并行读取和解码三路 AV1 视频。
+num_workers: 4
+# 当前 batch 8 在 RTX 4090 24 GB 上约占用 14 GB 显存。
+batch_size: 8
+# 每个 worker 预取 4 个 batch；总预取上限约为 16 个 batch。
+prefetch_factor: 4
+# epoch 之间复用 worker，避免重复启动和初始化视频解码进程。
+persistent_workers: true
+# 总优化步数，与 policy.max_steps 保持一致。
+steps: 100000
+# env=null，因此不会实际运行环境 rollout；该频率当前不生效。
+env_eval_freq: 20000
+# 每 200 步记录一次训练日志。
+log_freq: 200
+# 离线验证损失频率。当前 dataset.eval_split=0.0，因此必须为 0。
+eval_steps: 0
+# 离线验证最多使用多少样本；0 表示使用全部留出样本。
+max_eval_samples: 0
+# 时间戳匹配容差，通常不需要修改。
+tolerance_s: 1.0e-4
+# 每 5,000 步保存一次 checkpoint；最后一步也会保存。
+save_checkpoint: true
+save_freq: 20000
+# 使用 GrootConfig 给出的 AdamW + cosine preset。
+# 开启时不要再手工填写顶层 optimizer 和 scheduler。
+use_policy_training_preset: true
+optimizer: null
+scheduler: null
+# 是否把每个中间 checkpoint 都推送到 Hub。false 仍会上传最终模型。
+save_checkpoint_to_hub: false
+# 不启用通用 PEFT 和样本加权。
+peft: null
+sample_weighting: null
+# 数据集字段名不需要重命名。若旧数据键名不一致，可在这里填写映射。
+rename_map: {}
+
+# =============================================================================
+# Weights & Biases
+# =============================================================================
+wandb:
+  enable: true
+  disable_artifact: false
+  project: open_lid_groot
+  entity: ForgeLab
+  notes: GR00T N1.7 training for open-lid task
+  run_id: null
+  mode: online
+  add_tags: true

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>MCAP Split</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">DATASET SPLITTER</p>
+        <h1>MCAP <span>Split</span></h1>
+      </div>
+      <div class="header-status" id="header-status">
+        <span class="status-dot is-loading"></span>
+        <span>正在读取</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="batch-section" aria-labelledby="batch-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">BATCH PROGRESS</p>
+            <h2 id="batch-title">处理进度</h2>
+          </div>
+          <p class="source-path" id="source-path">—</p>
+        </div>
+        <div class="batch-grid">
+          <div class="stat-item"><span>数据总数</span><strong id="total-items">—</strong></div>
+          <div class="stat-item"><span>当前数据</span><strong id="current-item">—</strong></div>
+          <div class="stat-item"><span>已完成</span><strong id="completed-items">—</strong></div>
+          <div class="stat-item"><span>已跳过</span><strong id="skipped-items">—</strong></div>
+        </div>
+        <div class="batch-track"><div id="batch-progress-bar"></div></div>
+      </section>
+
+      <section class="current-section" id="current-section" aria-labelledby="current-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">CURRENT MCAP</p>
+            <h2 id="current-title">当前数据</h2>
+          </div>
+          <button class="quiet-button" id="skip-button" type="button">跳过此条</button>
+        </div>
+        <p class="current-path" id="current-path">正在读取文件信息</p>
+        <div class="scan-progress" id="scan-progress">
+          <div class="progress-copy">
+            <span id="scan-progress-message">正在解析 MCAP</span>
+            <strong id="scan-progress-percent">0%</strong>
+          </div>
+          <div class="progress-track"><div id="scan-progress-bar"></div></div>
+        </div>
+
+        <div id="item-content" hidden>
+          <div class="item-stats" id="item-stats"></div>
+          <div class="subheading">
+            <div>
+              <p class="section-kicker">CAMERA SOURCE</p>
+              <h3>选择相机</h3>
+            </div>
+            <span id="camera-count">0 个相机</span>
+          </div>
+          <div class="camera-grid" id="camera-grid"></div>
+          <p class="inline-message" id="camera-message"></p>
+        </div>
+      </section>
+
+      <section class="preview-section" id="preview-section" hidden aria-labelledby="preview-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="section-kicker">CAMERA PREVIEW</p>
+            <h2 id="preview-title">相机预览</h2>
+          </div>
+          <code id="selected-topic">—</code>
+        </div>
+
+        <div class="preview-loading" id="preview-loading">
+          <div class="progress-copy">
+            <span id="preview-progress-message">正在准备相机预览</span>
+            <strong id="preview-progress-percent">0%</strong>
+          </div>
+          <div class="progress-track"><div id="preview-progress-bar"></div></div>
+        </div>
+
+        <div class="player" id="player" hidden>
+          <div class="frame-stage">
+            <img id="preview-image" alt="当前相机帧" />
+            <div class="frame-badge" id="frame-badge">0 / 0</div>
+          </div>
+          <div class="player-controls">
+            <button class="icon-button" id="play-button" type="button" title="播放" aria-label="播放">▶</button>
+            <div class="timeline-control">
+              <input id="timeline" type="range" min="0" max="1" value="0" step="1" />
+              <div class="timeline-markers" id="timeline-markers"></div>
+            </div>
+            <span class="time-value" id="time-value">00:00.000</span>
+            <button class="secondary-button" id="add-breakpoint" type="button">添加断点</button>
+          </div>
+          <p class="inline-message" id="breakpoint-message"></p>
+        </div>
+      </section>
+
+      <section class="segments-section" id="segments-section" hidden aria-labelledby="segments-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="section-kicker">SPLIT OUTPUTS</p>
+            <h2 id="segments-title">分割片段</h2>
+          </div>
+          <span class="segment-count" id="segment-count">1 个片段</span>
+        </div>
+        <div class="breakpoint-list" id="breakpoint-list"></div>
+        <form id="split-form">
+          <div class="segment-list" id="segment-list"></div>
+          <div class="export-progress" id="export-progress" hidden>
+            <div class="progress-copy">
+              <span id="export-progress-message">正在准备分割</span>
+              <strong id="export-progress-percent">0%</strong>
+            </div>
+            <div class="progress-track"><div id="export-progress-bar"></div></div>
+          </div>
+          <p class="export-message" id="export-message" role="status"></p>
+          <button class="primary-button" id="split-button" type="submit" disabled>完成并导出 MCAP 片段</button>
+        </form>
+      </section>
+
+      <section class="history-section" aria-labelledby="history-title">
+        <div class="section-heading compact">
+          <div>
+            <p class="section-kicker">BATCH HISTORY</p>
+            <h2 id="history-title">处理记录</h2>
+          </div>
+        </div>
+        <div class="history-list" id="history-list">
+          <p class="empty-copy">尚无处理记录</p>
+        </div>
+      </section>
+
+      <section class="done-section" id="done-section" hidden>
+        <p class="section-kicker">BATCH COMPLETE</p>
+        <h2>全部 MCAP 已处理完成</h2>
+        <p id="done-summary"></p>
+      </section>
+    </main>
+
+    <template id="camera-template">
+      <button class="camera-card" type="button">
+        <span class="camera-thumb"><img alt="相机首帧预览" /></span>
+        <span class="camera-copy">
+          <strong class="camera-topic"></strong>
+          <small class="camera-schema"></small>
+          <span class="camera-metrics"></span>
+        </span>
+      </button>
+    </template>
+
+    <template id="segment-template">
+      <label class="segment-row">
+        <span class="segment-index"></span>
+        <span class="segment-range"></span>
+        <input class="segment-path" type="text" required />
+      </label>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

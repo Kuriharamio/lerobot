@@ -33,6 +33,7 @@ import numpy as np
 from PIL import Image
 
 from lerobot.datasets import LeRobotDataset
+from mio_ws.src.mcap_utils.common import discover_mcap_files
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -65,21 +66,6 @@ class FeatureMapping:
 class FeatureSpec:
     mapping: FeatureMapping
     kind: str
-
-
-def discover_mcap_files(source: Path) -> list[Path]:
-    source = source.expanduser().resolve()
-    if source.is_file():
-        if source.suffix.lower() != ".mcap":
-            raise ValueError(f"Input file is not an MCAP file: {source}")
-        return [source]
-    if not source.is_dir():
-        raise FileNotFoundError(source)
-
-    files = sorted(path for path in source.rglob("*") if path.is_file() and path.suffix.lower() == ".mcap")
-    if not files:
-        raise ValueError(f"No .mcap files found recursively under {source}")
-    return files
 
 
 def _format_timestamp(timestamp_ns: int | None) -> str | None:

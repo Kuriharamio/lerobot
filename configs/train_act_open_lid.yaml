@@ -5,7 +5,7 @@ dataset:
   # 数据集标识。设置 root 后，此字段仅作为标识，不会从 Hub 下载数据。
   repo_id: local/open_lid_v30
   # 本地 LeRobotDataset v3.0 根目录。设为 null 时从 HF_LEROBOT_HOME/repo_id 查找。
-  root: /home/admin1/ws/Eric/lerobot/rollio/open_lid_v30
+  root: /data/workspace/Projects/lerobot/rollio/open_lid_v30
   # 使用的 episode 子集。可选：null 表示全部，或列表，例如 [0, 1, 2]。
   episodes: null
   image_transforms:
@@ -219,7 +219,7 @@ env: null
 
 wandb:
   # 是否启用 Weights & Biases 日志。
-  enable: false
+  enable: true
   # 是否禁止上传 checkpoint artifact，即使已经启用 checkpoint 保存。
   disable_artifact: false
   # W&B 项目名称。

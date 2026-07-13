@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from mio_ws.src.mcap_to_v30.converter import (
+from mio_ws.src.mcap_utils.mcap_to_v30.converter import (
     convert_mcap_source,
     discover_mcap_files,
     scan_mcap_source,

@@ -357,7 +357,8 @@ lerobot-edit-dataset="lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-setup-can="lerobot.scripts.lerobot_setup_can:main"
 lerobot-annotate="lerobot.scripts.lerobot_annotate:main"
 lerobot-rollout="lerobot.scripts.lerobot_rollout:main"
-lerobot-convert-mcap-to-v30="mio_ws.src.mcap_to_v30.server:main"
+lerobot-convert-mcap-to-v30="mio_ws.src.mcap_utils.mcap_to_v30.server:main"
+lerobot-split-mcap="mio_ws.src.mcap_utils.mcap_split.server:main"
 
 # ---------------- Tool Configurations ----------------
 
@@ -376,7 +377,8 @@ torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
 
 [tool.setuptools.package-data]
 lerobot = ["envs/*.json", "annotations/steerable_pipeline/prompts/*.txt"]
-"mio_ws.src.mcap_to_v30" = ["static/*.html", "static/*.css", "static/*.js"]
+"mio_ws.src.mcap_utils.mcap_to_v30" = ["static/*.html", "static/*.css", "static/*.js"]
+"mio_ws.src.mcap_utils.mcap_split" = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

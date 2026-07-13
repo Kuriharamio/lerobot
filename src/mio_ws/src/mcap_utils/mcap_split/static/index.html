@@ -97,6 +97,17 @@
               <div class="timeline-markers" id="timeline-markers"></div>
             </div>
             <span class="time-value" id="time-value">00:00.000</span>
+            <label class="playback-rate">
+              <span>倍速</span>
+              <select id="playback-rate" aria-label="预览播放倍速">
+                <option value="0.5">0.5×</option>
+                <option value="1">1×</option>
+                <option value="2">2×</option>
+                <option value="4">4×</option>
+                <option value="8">8×</option>
+                <option value="16">16×</option>
+              </select>
+            </label>
             <button class="secondary-button" id="add-breakpoint" type="button">添加断点</button>
           </div>
           <p class="inline-message" id="breakpoint-message"></p>
@@ -111,6 +122,7 @@
           </div>
           <span class="segment-count" id="segment-count">1 个片段</span>
         </div>
+        <p class="batch-segment-warning" id="batch-segment-warning" hidden></p>
         <div class="breakpoint-list" id="breakpoint-list"></div>
         <form id="split-form">
           <div class="segment-list" id="segment-list"></div>

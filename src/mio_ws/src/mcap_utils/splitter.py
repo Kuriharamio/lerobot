@@ -13,19 +13,48 @@ from __future__ import annotations
 import bisect
 import os
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from typing import Any
 
 from mio_ws.src.mcap_utils.common import ProgressCallback
 
 
-def suggested_output_paths(source: Path, segments: int) -> list[Path]:
-    output_dir = source.parent / f"{source.stem}_split"
-    return [output_dir / f"{source.stem}_part_{index:03d}.mcap" for index in range(segments)]
+class ExistingOutputsError(FileExistsError):
+    def __init__(self, paths: list[Path]) -> None:
+        self.paths = tuple(paths)
+        if len(paths) == 1:
+            message = f"Output file already exists: {paths[0]}"
+        else:
+            message = f"{len(paths)} output files already exist."
+        super().__init__(message)
 
 
-def validate_split_request(source: Path, cut_timestamps_ns: list[int], output_paths: list[Path]) -> None:
+def suggested_output_pattern(batch_source: Path, item_source: Path) -> Path:
+    batch_source = batch_source.expanduser().resolve()
+    item_source = item_source.expanduser().resolve()
+    if batch_source.is_dir():
+        relative_path = item_source.relative_to(batch_source)
+        batch_name = batch_source.name
+    else:
+        if item_source != batch_source:
+            raise ValueError(f"MCAP item {item_source} does not match batch source {batch_source}.")
+        relative_path = Path(item_source.name)
+        batch_name = batch_source.stem
+    return batch_source.parent / f"{batch_name}_split_{{segment}}" / relative_path
+
+
+def suggested_output_paths(batch_source: Path, item_source: Path, segments: int) -> list[Path]:
+    pattern = str(suggested_output_pattern(batch_source, item_source))
+    return [Path(pattern.replace("{segment}", str(index + 1))) for index in range(segments)]
+
+
+def validate_split_request(
+    source: Path,
+    cut_timestamps_ns: list[int],
+    output_paths: list[Path],
+    overwrite_existing: bool = False,
+) -> None:
     source = source.expanduser().resolve()
     if not cut_timestamps_ns:
         raise ValueError("At least one breakpoint is required.")
@@ -37,13 +66,18 @@ def validate_split_request(source: Path, cut_timestamps_ns: list[int], output_pa
     resolved_paths = [path.expanduser().resolve() for path in output_paths]
     if len(set(resolved_paths)) != len(resolved_paths):
         raise ValueError("Output paths must be unique.")
+    existing_paths = []
     for path in resolved_paths:
         if path.suffix.lower() != ".mcap":
             raise ValueError(f"Output path must end with .mcap: {path}")
         if path == source:
             raise ValueError("An output path cannot overwrite the input MCAP file.")
         if path.exists():
-            raise FileExistsError(f"Output file already exists: {path}")
+            if not path.is_file():
+                raise ValueError(f"Output path exists but is not a file: {path}")
+            existing_paths.append(path)
+    if existing_paths and not overwrite_existing:
+        raise ExistingOutputsError(existing_paths)
 
 
 def split_mcap_file(
@@ -51,6 +85,7 @@ def split_mcap_file(
     cut_timestamps_ns: list[int],
     output_paths: list[Path],
     progress: ProgressCallback | None = None,
+    overwrite_existing: bool = False,
 ) -> dict[str, Any]:
     try:
         from mcap.reader import make_reader
@@ -60,12 +95,13 @@ def split_mcap_file(
 
     source = source.expanduser().resolve()
     outputs = [path.expanduser().resolve() for path in output_paths]
-    validate_split_request(source, cut_timestamps_ns, outputs)
+    validate_split_request(source, cut_timestamps_ns, outputs, overwrite_existing)
     for output in outputs:
         output.parent.mkdir(parents=True, exist_ok=True)
 
     temporary_paths = [output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp") for output in outputs]
-    renamed: list[Path] = []
+    committed: list[Path] = []
+    backups: dict[Path, Path] = {}
     message_counts = [0 for _ in outputs]
     try:
         with source.open("rb") as source_stream, ExitStack() as stack:
@@ -143,15 +179,34 @@ def split_mcap_file(
             for writer in writers:
                 writer.finish()
 
-        for temporary, output in zip(temporary_paths, outputs, strict=True):
-            os.link(temporary, output)
-            renamed.append(output)
-            temporary.unlink()
+        if overwrite_existing:
+            for output in outputs:
+                if output.exists():
+                    if not output.is_file():
+                        raise ValueError(f"Output path exists but is not a file: {output}")
+                    backup = output.with_name(f".{output.name}.{uuid.uuid4().hex}.backup")
+                    os.replace(output, backup)
+                    backups[output] = backup
+            for temporary, output in zip(temporary_paths, outputs, strict=True):
+                os.replace(temporary, output)
+                committed.append(output)
+            for backup in backups.values():
+                with suppress(OSError):
+                    backup.unlink(missing_ok=True)
+            backups.clear()
+        else:
+            for temporary, output in zip(temporary_paths, outputs, strict=True):
+                os.link(temporary, output)
+                committed.append(output)
+                temporary.unlink()
     except Exception:
         for path in temporary_paths:
             path.unlink(missing_ok=True)
-        for path in renamed:
+        for path in committed:
             path.unlink(missing_ok=True)
+        for output, backup in backups.items():
+            if backup.exists():
+                os.replace(backup, output)
         raise
 
     result = {

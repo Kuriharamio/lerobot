@@ -19,6 +19,8 @@ import tempfile
 import threading
 import traceback
 import webbrowser
+from collections.abc import Callable
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,9 +33,27 @@ from mio_ws.src.mcap_utils.common import (
     iter_camera_frames,
     scan_mcap_item,
 )
-from mio_ws.src.mcap_utils.splitter import split_mcap_file, suggested_output_paths
+from mio_ws.src.mcap_utils.splitter import (
+    ExistingOutputsError,
+    split_mcap_file,
+    suggested_output_paths,
+    suggested_output_pattern,
+    validate_split_request,
+)
 
 STATIC_ROOT = Path(__file__).parent / "static"
+PRELOAD_AHEAD = 3
+
+
+@dataclass
+class CachedItem:
+    result: dict[str, Any]
+    thumbnails: dict[str, bytes]
+    preview_topic: str | None = None
+    preview_frames: list[dict[str, Any]] | None = None
+    preview_dir: Path | None = None
+    preview_result: dict[str, Any] | None = None
+    preview_attempted_topic: str | None = None
 
 
 class ApplicationState:
@@ -42,6 +62,18 @@ class ApplicationState:
         self.files = discover_mcap_files(self.source)
         self.lock = threading.RLock()
         self.current_index = 0
+        self.expected_segments: int | None = None
+        self.preferred_camera_topic: str | None = None
+        self.preload_cache: dict[int, CachedItem] = {}
+        self.preload_failures: set[int] = set()
+        self.preload_generation = 0
+        self.preload_thread: threading.Thread | None = None
+        self.preload_status: dict[str, Any] = {
+            "state": "idle",
+            "message": "等待选择相机",
+            "cached_items": 0,
+            "target_items": 0,
+        }
         self.history: list[dict[str, Any]] = []
         self.item_job: dict[str, Any] = {"state": "idle", "progress": 0, "message": "等待解析"}
         self.item_result: dict[str, Any] | None = None
@@ -54,6 +86,12 @@ class ApplicationState:
         self.split_job: dict[str, Any] = {"state": "idle", "progress": 0, "message": "等待分割"}
 
     def close(self) -> None:
+        with self.lock:
+            self.preload_generation += 1
+            preload_thread = self.preload_thread
+            self.preload_thread = None
+        if preload_thread is not None and preload_thread is not threading.current_thread():
+            preload_thread.join(timeout=2)
         shutil.rmtree(self.temp_root, ignore_errors=True)
 
     def session_status(self) -> dict[str, Any]:
@@ -69,6 +107,9 @@ class ApplicationState:
                 "current_index": self.current_index,
                 "current_number": min(self.current_index + 1, len(self.files)),
                 "completed": completed,
+                "expected_segments": self.expected_segments,
+                "preferred_camera_topic": self.preferred_camera_topic,
+                "preload": dict(self.preload_status),
                 "history": list(self.history),
                 "item": dict(self.item_job),
             }
@@ -85,50 +126,18 @@ class ApplicationState:
             index = self.current_index
             path = self.files[index]
             self.item_job = {"state": "running", "progress": 5, "message": f"正在解析 {path.name}"}
-        try:
-            result = scan_mcap_item(path)
-            candidates = result["cameras"]
-            cameras = []
-            thumbnails: dict[str, bytes] = {}
-            warnings = []
-            for camera_index, camera in enumerate(candidates):
-                with self.lock:
-                    if index != self.current_index:
-                        return
-                    self.item_job = {
-                        "state": "running",
-                        "progress": round(55 + camera_index / max(1, len(candidates)) * 40, 1),
-                        "message": f"正在生成相机预览 {camera_index + 1}/{len(candidates)}",
-                    }
-                generator = iter_camera_frames(path, camera["topic"])
-                try:
-                    frame = next(generator)
-                except Exception as error:
-                    warnings.append(f"{camera['topic']}: {error}")
-                    continue
-                finally:
-                    generator.close()
-                height, width = frame.image.shape[:2]
-                cameras.append({**camera, "shape": [height, width, 3]})
-                thumbnails[camera["topic"]] = encode_jpeg(frame.image, quality=78)
 
-            result["cameras"] = cameras
-            result["warnings"] = warnings
-            result["relative_path"] = (
-                str(path.relative_to(self.source)) if self.source.is_dir() else path.name
-            )
-            result["suggested_outputs"] = [str(item) for item in suggested_output_paths(path, 2)]
-            for key in ("start_ns", "end_ns"):
-                if result[key] is not None:
-                    result[key] = str(result[key])
-            for camera in result["cameras"]:
-                camera["first_ns"] = str(camera["first_ns"])
-                camera["last_ns"] = str(camera["last_ns"])
+        def update(progress: float, message: str) -> None:
+            with self.lock:
+                if index == self.current_index:
+                    self.item_job = {"state": "running", "progress": progress, "message": message}
+
+        try:
+            cached_item = self._build_item_cache(path, update)
             with self.lock:
                 if index != self.current_index:
                     return
-                self.thumbnails = thumbnails
-                self.item_result = result
+                self._adopt_item_cache_locked(cached_item)
                 self.item_job = {"state": "completed", "progress": 100, "message": "当前 MCAP 解析完成"}
         except Exception as error:
             logging.exception("Could not scan MCAP item")
@@ -141,6 +150,77 @@ class ApplicationState:
                         "error": str(error),
                         "traceback": traceback.format_exc(),
                     }
+
+    def _build_item_cache(
+        self,
+        path: Path,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> CachedItem:
+        if progress:
+            progress(8, f"正在解析 {path.name}")
+        result = scan_mcap_item(path)
+        candidates = result["cameras"]
+        cameras = []
+        thumbnails: dict[str, bytes] = {}
+        warnings = []
+        for camera_index, camera in enumerate(candidates):
+            if progress:
+                progress(
+                    round(55 + camera_index / max(1, len(candidates)) * 40, 1),
+                    f"正在生成相机预览 {camera_index + 1}/{len(candidates)}",
+                )
+            generator = iter_camera_frames(path, camera["topic"])
+            try:
+                frame = next(generator)
+            except Exception as error:
+                warnings.append(f"{camera['topic']}: {error}")
+                continue
+            finally:
+                generator.close()
+            height, width = frame.image.shape[:2]
+            cameras.append({**camera, "shape": [height, width, 3]})
+            thumbnails[camera["topic"]] = encode_jpeg(frame.image, quality=78)
+
+        result["cameras"] = cameras
+        result["warnings"] = warnings
+        result["relative_path"] = str(path.relative_to(self.source)) if self.source.is_dir() else path.name
+        result["suggested_output_pattern"] = str(suggested_output_pattern(self.source, path))
+        self._refresh_suggested_outputs(result, path)
+        for key in ("start_ns", "end_ns"):
+            if result[key] is not None:
+                result[key] = str(result[key])
+        for camera in result["cameras"]:
+            camera["first_ns"] = str(camera["first_ns"])
+            camera["last_ns"] = str(camera["last_ns"])
+        return CachedItem(result=result, thumbnails=thumbnails)
+
+    def _refresh_suggested_outputs(self, result: dict[str, Any], path: Path) -> None:
+        suggested_segments = self.expected_segments or 2
+        result["suggested_outputs"] = [
+            str(item) for item in suggested_output_paths(self.source, path, suggested_segments)
+        ]
+
+    def _adopt_item_cache_locked(self, cached_item: CachedItem) -> None:
+        path = self.files[self.current_index]
+        self._refresh_suggested_outputs(cached_item.result, path)
+        self.thumbnails = cached_item.thumbnails
+        self.item_result = cached_item.result
+        if (
+            cached_item.preview_topic == self.preferred_camera_topic
+            and cached_item.preview_frames is not None
+            and cached_item.preview_dir is not None
+            and cached_item.preview_result is not None
+        ):
+            self.preview_topic = cached_item.preview_topic
+            self.preview_frames = cached_item.preview_frames
+            self.preview_dir = cached_item.preview_dir
+            self.preview_job = {
+                "state": "completed",
+                "progress": 100,
+                "message": "已加载后台预览缓存",
+                "topic": cached_item.preview_topic,
+                "result": cached_item.preview_result,
+            }
 
     def thumbnail(self, topic: str) -> bytes:
         with self.lock:
@@ -159,8 +239,18 @@ class ApplicationState:
             known_topics = {camera["topic"] for camera in self.item_result["cameras"]}
             if topic not in known_topics:
                 raise ValueError(f"Unknown or unsupported camera topic: {topic}")
+            if topic == self.preview_topic and self.preview_job["state"] in {
+                "queued",
+                "running",
+                "completed",
+            }:
+                self._set_preferred_camera_locked(topic)
+                if self.preview_job["state"] == "completed":
+                    self._schedule_preload_locked()
+                return self.preview_status()
             if self.preview_job["state"] in {"queued", "running"}:
                 raise RuntimeError("A camera preview is already being prepared.")
+            self._set_preferred_camera_locked(topic)
             self._clear_preview_locked()
             self.preview_topic = topic
             self.preview_job = {
@@ -180,11 +270,6 @@ class ApplicationState:
         return self.preview_status()
 
     def _prepare_preview(self, item_index: int, path: Path, topic: str) -> None:
-        preview_dir = self.temp_root / f"item-{item_index:06d}"
-        shutil.rmtree(preview_dir, ignore_errors=True)
-        preview_dir.mkdir(parents=True)
-        frames: list[dict[str, Any]] = []
-
         def update(progress: dict[str, Any]) -> None:
             with self.lock:
                 if item_index == self.current_index and topic == self.preview_topic:
@@ -192,7 +277,49 @@ class ApplicationState:
 
         try:
             update({"progress": 0, "message": "正在解码相机帧"})
-            for frame_index, frame in enumerate(iter_camera_frames(path, topic, update)):
+            preview_dir, frames, result = self._build_preview_cache(
+                path,
+                topic,
+                self.temp_root / f"current-{item_index:06d}",
+                update,
+            )
+            with self.lock:
+                if item_index != self.current_index or topic != self.preview_topic:
+                    shutil.rmtree(preview_dir, ignore_errors=True)
+                    return
+                self.preview_dir = preview_dir
+                self.preview_frames = frames
+                self.preview_job = {
+                    "state": "completed",
+                    "progress": 100,
+                    "message": "相机预览准备完成",
+                    "topic": topic,
+                    "result": result,
+                }
+                self._schedule_preload_locked()
+        except Exception as error:
+            logging.exception("Could not prepare camera preview")
+            with self.lock:
+                if item_index == self.current_index and topic == self.preview_topic:
+                    self.preview_job = {
+                        "state": "failed",
+                        "progress": 100,
+                        "message": str(error),
+                        "error": str(error),
+                    }
+
+    def _build_preview_cache(
+        self,
+        path: Path,
+        topic: str,
+        preview_dir: Path,
+        progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
+        shutil.rmtree(preview_dir, ignore_errors=True)
+        preview_dir.mkdir(parents=True)
+        frames: list[dict[str, Any]] = []
+        try:
+            for frame_index, frame in enumerate(iter_camera_frames(path, topic, progress)):
                 frame_path = preview_dir / f"{frame_index:08d}.jpg"
                 frame_path.write_bytes(encode_jpeg(frame.image))
                 frames.append({"index": frame_index, "timestamp_ns": frame.timestamp_ns})
@@ -208,30 +335,150 @@ class ApplicationState:
                 "duration_s": duration_s,
                 "fps": round(fps, 2),
             }
-            with self.lock:
-                if item_index != self.current_index or topic != self.preview_topic:
-                    shutil.rmtree(preview_dir, ignore_errors=True)
-                    return
-                self.preview_dir = preview_dir
-                self.preview_frames = frames
-                self.preview_job = {
-                    "state": "completed",
-                    "progress": 100,
-                    "message": "相机预览准备完成",
-                    "topic": topic,
-                    "result": result,
-                }
-        except Exception as error:
-            logging.exception("Could not prepare camera preview")
+            return preview_dir, frames, result
+        except Exception:
             shutil.rmtree(preview_dir, ignore_errors=True)
-            with self.lock:
-                if item_index == self.current_index and topic == self.preview_topic:
-                    self.preview_job = {
-                        "state": "failed",
-                        "progress": 100,
-                        "message": str(error),
-                        "error": str(error),
+            raise
+
+    def _set_preferred_camera_locked(self, topic: str) -> None:
+        if topic == self.preferred_camera_topic:
+            return
+        self.preferred_camera_topic = topic
+        self.preload_generation += 1
+        self.preload_failures.clear()
+        for cached_item in self.preload_cache.values():
+            if cached_item.preview_dir is not None:
+                shutil.rmtree(cached_item.preview_dir, ignore_errors=True)
+            cached_item.preview_topic = None
+            cached_item.preview_frames = None
+            cached_item.preview_dir = None
+            cached_item.preview_result = None
+            cached_item.preview_attempted_topic = None
+        self.preload_status = {
+            "state": "queued",
+            "message": "等待后台预加载",
+            "cached_items": 0,
+            "target_items": min(PRELOAD_AHEAD, max(0, len(self.files) - self.current_index - 1)),
+        }
+
+    def _preload_targets_locked(self, topic: str) -> list[int]:
+        stop = min(len(self.files), self.current_index + PRELOAD_AHEAD + 1)
+        return [
+            index
+            for index in range(self.current_index + 1, stop)
+            if index not in self.preload_failures
+            and (
+                index not in self.preload_cache or self.preload_cache[index].preview_attempted_topic != topic
+            )
+        ]
+
+    def _schedule_preload_locked(self) -> None:
+        topic = self.preferred_camera_topic
+        if topic is None or self.current_index >= len(self.files):
+            return
+        targets = self._preload_targets_locked(topic)
+        target_count = min(PRELOAD_AHEAD, max(0, len(self.files) - self.current_index - 1))
+        cached_count = target_count - len(targets)
+        if not targets:
+            self.preload_status = {
+                "state": "completed",
+                "message": f"已预加载 {cached_count} 条后续数据",
+                "cached_items": cached_count,
+                "target_items": target_count,
+            }
+            return
+        if self.preload_thread is not None and self.preload_thread.is_alive():
+            return
+        generation = self.preload_generation
+        self.preload_status = {
+            "state": "running",
+            "message": f"正在预加载后续数据（{cached_count}/{target_count}）",
+            "cached_items": cached_count,
+            "target_items": target_count,
+        }
+        thread = threading.Thread(
+            target=self._run_preload,
+            args=(generation, topic),
+            name="mcap-split-preload",
+            daemon=True,
+        )
+        self.preload_thread = thread
+        thread.start()
+
+    def _run_preload(self, generation: int, topic: str) -> None:
+        try:
+            while True:
+                with self.lock:
+                    if generation != self.preload_generation or topic != self.preferred_camera_topic:
+                        return
+                    targets = self._preload_targets_locked(topic)
+                    if not targets:
+                        return
+                    index = targets[0]
+                    path = self.files[index]
+                    cached_item = self.preload_cache.get(index)
+                    target_count = min(
+                        PRELOAD_AHEAD,
+                        max(0, len(self.files) - self.current_index - 1),
+                    )
+                    cached_count = target_count - len(targets)
+                    self.preload_status = {
+                        "state": "running",
+                        "message": f"正在预加载第 {index + 1} 条数据（{cached_count}/{target_count}）",
+                        "cached_items": cached_count,
+                        "target_items": target_count,
                     }
+
+                try:
+                    if cached_item is None:
+                        cached_item = self._build_item_cache(path)
+                        with self.lock:
+                            if (
+                                generation != self.preload_generation
+                                or topic != self.preferred_camera_topic
+                                or index <= self.current_index
+                            ):
+                                return
+                            self.preload_cache[index] = cached_item
+
+                    known_topics = {camera["topic"] for camera in cached_item.result["cameras"]}
+                    if topic in known_topics:
+                        preview_dir, frames, result = self._build_preview_cache(
+                            path,
+                            topic,
+                            self.temp_root / f"preload-{generation:04d}-{index:06d}",
+                        )
+                    else:
+                        preview_dir, frames, result = None, None, None
+
+                    with self.lock:
+                        if (
+                            generation != self.preload_generation
+                            or topic != self.preferred_camera_topic
+                            or index <= self.current_index
+                        ):
+                            if preview_dir is not None:
+                                shutil.rmtree(preview_dir, ignore_errors=True)
+                            return
+                        cached_item.preview_attempted_topic = topic
+                        cached_item.preview_topic = topic if preview_dir is not None else None
+                        cached_item.preview_frames = frames
+                        cached_item.preview_dir = preview_dir
+                        cached_item.preview_result = result
+                except Exception as error:
+                    logging.warning("Could not preload MCAP item %s: %s", path, error)
+                    with self.lock:
+                        if generation == self.preload_generation:
+                            if cached_item is not None and index in self.preload_cache:
+                                cached_item.preview_attempted_topic = topic
+                            else:
+                                self.preload_failures.add(index)
+        finally:
+            with self.lock:
+                if self.preload_thread is threading.current_thread():
+                    self.preload_thread = None
+                if generation == self.preload_generation and topic == self.preferred_camera_topic:
+                    self._schedule_preload_locked()
 
     def preview_status(self) -> dict[str, Any]:
         with self.lock:
@@ -268,8 +515,11 @@ class ApplicationState:
         ):
             raise ValueError("breakpoints_ns must contain integer timestamp strings.")
         breakpoints = [int(item) for item in raw_breakpoints]
+        confirmed_segment_count = payload.get("confirm_segment_count") is True
+        overwrite_existing = payload.get("overwrite_existing") is True
         if not isinstance(raw_outputs, list) or not all(isinstance(item, str) for item in raw_outputs):
             raise ValueError("output_paths must be a list of file paths.")
+        output_paths = [Path(item) for item in raw_outputs]
 
         with self.lock:
             self._require_current_item(item_index)
@@ -279,14 +529,25 @@ class ApplicationState:
             timestamp_set = set(timestamps[1:])
             if any(timestamp not in timestamp_set for timestamp in breakpoints):
                 raise ValueError("Every breakpoint must match a camera frame after the first frame.")
+            segment_count = len(breakpoints) + 1
+            if (
+                self.expected_segments is not None
+                and segment_count != self.expected_segments
+                and not confirmed_segment_count
+            ):
+                raise ValueError(
+                    f"This batch normally uses {self.expected_segments} segments, but the current "
+                    f"item uses {segment_count}. Explicit confirmation is required."
+                )
             if self.split_job["state"] in {"queued", "running"}:
                 raise RuntimeError("An MCAP split job is already running.")
-            self.split_job = {"state": "queued", "progress": 0, "message": "正在准备分割"}
             index = self.current_index
             path = self.files[index]
+            validate_split_request(path, breakpoints, output_paths, overwrite_existing)
+            self.split_job = {"state": "queued", "progress": 0, "message": "正在准备分割"}
         threading.Thread(
             target=self._run_split,
-            args=(index, path, breakpoints, [Path(item) for item in raw_outputs]),
+            args=(index, path, breakpoints, output_paths, overwrite_existing),
             name="mcap-split-export",
             daemon=True,
         ).start()
@@ -298,6 +559,7 @@ class ApplicationState:
         path: Path,
         breakpoints: list[int],
         output_paths: list[Path],
+        overwrite_existing: bool,
     ) -> None:
         def update(progress: dict[str, Any]) -> None:
             with self.lock:
@@ -306,15 +568,24 @@ class ApplicationState:
 
         try:
             update({"message": "开始分割 MCAP", "progress": 0})
-            result = split_mcap_file(path, breakpoints, output_paths, update)
+            result = split_mcap_file(
+                path,
+                breakpoints,
+                output_paths,
+                update,
+                overwrite_existing=overwrite_existing,
+            )
             with self.lock:
                 if item_index != self.current_index:
                     return
+                if self.expected_segments is None:
+                    self.expected_segments = result["segments"]
                 self.history.append(
                     {
                         "index": item_index,
                         "source": str(path),
                         "state": "completed",
+                        "segments": result["segments"],
                         "outputs": result["outputs"],
                     }
                 )
@@ -371,8 +642,23 @@ class ApplicationState:
         self._clear_preview_locked()
         self.thumbnails = {}
         self.item_result = None
-        self.item_job = {"state": "idle", "progress": 0, "message": "等待解析"}
         self.current_index += 1
+        cached_item = self.preload_cache.pop(self.current_index, None)
+        self.preload_failures.discard(self.current_index)
+        if cached_item is None:
+            self.item_job = {"state": "idle", "progress": 0, "message": "等待解析"}
+        else:
+            self._adopt_item_cache_locked(cached_item)
+            self.item_job = {
+                "state": "completed",
+                "progress": 100,
+                "message": "已加载后台条目缓存",
+            }
+        for index in [index for index in self.preload_cache if index < self.current_index]:
+            stale_item = self.preload_cache.pop(index)
+            if stale_item.preview_dir is not None:
+                shutil.rmtree(stale_item.preview_dir, ignore_errors=True)
+        self._schedule_preload_locked()
 
 
 class McapSplitUiServer(ThreadingHTTPServer):
@@ -431,6 +717,15 @@ class McapSplitRequestHandler(BaseHTTPRequestHandler):
     def _handle_json(self, callback: Any) -> None:
         try:
             self._send_json(callback())
+        except ExistingOutputsError as error:
+            self._send_json(
+                {
+                    "error": str(error),
+                    "code": "outputs_exist",
+                    "paths": [str(path) for path in error.paths],
+                },
+                HTTPStatus.CONFLICT,
+            )
         except (ValueError, FileNotFoundError, FileExistsError, ImportError, RuntimeError) as error:
             self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:
@@ -446,6 +741,8 @@ class McapSplitRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            logging.debug("Client disconnected before the image response completed")
         except (ValueError, FileNotFoundError, RuntimeError) as error:
             self.send_error(HTTPStatus.BAD_REQUEST, str(error))
 

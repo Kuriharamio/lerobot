@@ -28,7 +28,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
   letter-spacing: 0;
 }
@@ -401,7 +402,7 @@ section + section {
 
 .player-controls {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 88px auto;
+  grid-template-columns: 40px minmax(0, 1fr) 88px auto auto;
   align-items: center;
   gap: 12px;
   margin-top: 14px;
@@ -452,6 +453,24 @@ section + section {
   text-align: right;
 }
 
+.playback-rate {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.playback-rate select {
+  height: 40px;
+  padding: 0 28px 0 10px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid #cfd6cf;
+  border-radius: 5px;
+}
+
 .secondary-button,
 .primary-button {
   color: #fff;
@@ -477,6 +496,16 @@ section + section {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 18px;
+}
+
+.batch-segment-warning {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  color: #71411f;
+  background: #fff7ec;
+  font-size: 12px;
+  border: 1px solid #ead3b7;
+  border-radius: 5px;
 }
 
 .breakpoint-chip {
@@ -560,6 +589,10 @@ section + section {
 
 .export-message.is-success {
   color: var(--accent-dark);
+}
+
+.export-message.is-neutral {
+  color: var(--muted);
 }
 
 .history-list {
@@ -649,7 +682,7 @@ section + section {
   }
 
   .player-controls {
-    grid-template-columns: 40px minmax(0, 1fr) 88px;
+    grid-template-columns: 40px minmax(0, 1fr) 88px auto;
   }
 
   .player-controls .secondary-button {
@@ -720,6 +753,10 @@ section + section {
   .time-value {
     grid-column: 2;
     text-align: left;
+  }
+
+  .playback-rate {
+    grid-column: 1 / -1;
   }
 
   .segment-row,

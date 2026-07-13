@@ -7,6 +7,7 @@ const state = {
   breakpoints: [],
   outputPaths: [],
   playing: false,
+  playbackRate: Number(localStorage.getItem("mcapSplitPlaybackRate")) || 1,
   playTimer: null,
   exporting: false,
   sessionTimer: null,
@@ -45,6 +46,7 @@ const elements = {
   previewImage: document.querySelector("#preview-image"),
   frameBadge: document.querySelector("#frame-badge"),
   playButton: document.querySelector("#play-button"),
+  playbackRate: document.querySelector("#playback-rate"),
   timeline: document.querySelector("#timeline"),
   timelineMarkers: document.querySelector("#timeline-markers"),
   timeValue: document.querySelector("#time-value"),
@@ -52,6 +54,7 @@ const elements = {
   breakpointMessage: document.querySelector("#breakpoint-message"),
   segmentsSection: document.querySelector("#segments-section"),
   segmentCount: document.querySelector("#segment-count"),
+  batchSegmentWarning: document.querySelector("#batch-segment-warning"),
   breakpointList: document.querySelector("#breakpoint-list"),
   splitForm: document.querySelector("#split-form"),
   segmentList: document.querySelector("#segment-list"),
@@ -254,6 +257,17 @@ function renderItem(item) {
   } else if (item.warnings.length) {
     elements.cameraMessage.textContent = `有 ${item.warnings.length} 个相机 topic 无法预览。`;
   }
+  const preferredTopic = state.session.preferred_camera_topic;
+  const itemIndex = state.session.current_index;
+  if (preferredTopic && item.cameras.some((camera) => camera.topic === preferredTopic)) {
+    window.setTimeout(() => {
+      if (state.selectedTopic === null && state.session.current_index === itemIndex) {
+        selectCamera(preferredTopic);
+      }
+    }, 0);
+  } else if (preferredTopic && item.cameras.length) {
+    elements.cameraMessage.textContent = `首选相机 ${preferredTopic} 在当前数据中不可用，请重新选择。`;
+  }
 }
 
 async function selectCamera(topic) {
@@ -336,11 +350,16 @@ function togglePlayback() {
   state.playing = true;
   elements.playButton.textContent = "Ⅱ";
   elements.playButton.title = "暂停";
+  startPlaybackTimer();
+}
+
+function startPlaybackTimer() {
+  clearInterval(state.playTimer);
   const selectedCamera = state.session.item.result.cameras.find(
     (camera) => camera.topic === state.selectedTopic,
   );
   const fps = Number(selectedCamera ? selectedCamera.fps : 0) || 30;
-  const delay = Math.max(20, Math.round(1000 / fps));
+  const delay = Math.max(1, Math.round(1000 / fps / state.playbackRate));
   state.playTimer = setInterval(() => {
     if (state.currentFrame >= state.previewFrames.length - 1) {
       stopPlayback();
@@ -376,11 +395,7 @@ function addBreakpoint() {
 }
 
 function defaultOutputPath(index) {
-  const first = state.session.item.result.suggested_outputs[0];
-  if (/_part_000\.mcap$/.test(first)) {
-    return first.replace(/_part_000\.mcap$/, `_part_${String(index).padStart(3, "0")}.mcap`);
-  }
-  return `${first}.${index}.mcap`;
+  return state.session.item.result.suggested_output_pattern.replace("{segment}", String(index + 1));
 }
 
 function renderSegments() {
@@ -390,6 +405,12 @@ function renderSegments() {
     (_, index) => state.outputPaths[index] || defaultOutputPath(index),
   );
   elements.segmentCount.textContent = `${segmentTotal} 个片段`;
+  const expectedSegments = state.session.expected_segments;
+  const differsFromBatch = expectedSegments !== null && segmentTotal !== expectedSegments;
+  elements.batchSegmentWarning.hidden = !differsFromBatch;
+  elements.batchSegmentWarning.textContent = differsFromBatch
+    ? `本批次默认导出 ${expectedSegments} 个片段，当前设置为 ${segmentTotal} 个。导出前需要确认。`
+    : "";
   elements.breakpointList.replaceChildren();
   state.breakpoints.forEach((breakpoint, index) => {
     const chip = document.createElement("span");
@@ -451,6 +472,15 @@ async function startSplit(event) {
   event.preventDefault();
   validateSplit();
   if (elements.splitButton.disabled) return;
+  const expectedSegments = state.session.expected_segments;
+  const segmentTotal = state.breakpoints.length + 1;
+  let confirmedSegmentCount = false;
+  if (expectedSegments !== null && segmentTotal !== expectedSegments) {
+    confirmedSegmentCount = window.confirm(
+      `本批次默认分割为 ${expectedSegments} 个片段，当前为 ${segmentTotal} 个。确认按当前数量导出吗？`,
+    );
+    if (!confirmedSegmentCount) return;
+  }
   stopPlayback();
   state.exporting = true;
   validateSplit();
@@ -460,22 +490,53 @@ async function startSplit(event) {
   updateProgress("export", {progress: 0, message: "正在准备分割"});
   setHeaderStatus("正在导出", "loading");
   try {
-    const response = await fetch("/api/split", {
+    const payload = {
+      item_index: state.session.current_index,
+      topic: state.selectedTopic,
+      breakpoints_ns: state.breakpoints.map((item) => item.timestamp_ns),
+      output_paths: state.outputPaths,
+      confirm_segment_count: confirmedSegmentCount,
+      overwrite_existing: false,
+    };
+    let response = await fetch("/api/split", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        item_index: state.session.current_index,
-        topic: state.selectedTopic,
-        breakpoints_ns: state.breakpoints.map((item) => item.timestamp_ns),
-        output_paths: state.outputPaths,
-      }),
+      body: JSON.stringify(payload),
     });
-    const result = await response.json();
+    let result = await response.json();
+    if (response.status === 409 && result.code === "outputs_exist") {
+      const paths = Array.isArray(result.paths) ? result.paths : [];
+      const visiblePaths = paths.slice(0, 5).join("\n");
+      const remaining = paths.length > 5 ? `\n……另有 ${paths.length - 5} 个文件` : "";
+      const confirmedOverwrite = window.confirm(
+        `发现 ${paths.length} 个已存在的输出文件，是否覆盖？\n\n${visiblePaths}${remaining}`,
+      );
+      if (!confirmedOverwrite) {
+        cancelSplit("已取消覆盖，现有文件未被修改。");
+        return;
+      }
+      payload.overwrite_existing = true;
+      response = await fetch("/api/split", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      result = await response.json();
+    }
     if (!response.ok) throw new Error(result.error || "无法启动分割任务");
     pollSplit();
   } catch (error) {
     finishSplit(false, error.message);
   }
+}
+
+function cancelSplit(message) {
+  state.exporting = false;
+  validateSplit();
+  elements.exportProgress.hidden = true;
+  elements.exportMessage.textContent = message;
+  elements.exportMessage.className = "export-message is-neutral";
+  setHeaderStatus("等待导出");
 }
 
 async function pollSplit() {
@@ -531,6 +592,12 @@ async function skipCurrent() {
 }
 
 elements.playButton.addEventListener("click", togglePlayback);
+elements.playbackRate.value = String(state.playbackRate);
+elements.playbackRate.addEventListener("change", () => {
+  state.playbackRate = Number(elements.playbackRate.value) || 1;
+  localStorage.setItem("mcapSplitPlaybackRate", String(state.playbackRate));
+  if (state.playing) startPlaybackTimer();
+});
 elements.timeline.addEventListener("input", () => {
   stopPlayback();
   state.currentFrame = Number(elements.timeline.value);

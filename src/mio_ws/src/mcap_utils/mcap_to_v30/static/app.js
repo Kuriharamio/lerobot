@@ -87,6 +87,61 @@ function lerobotShape(mapping) {
   return null;
 }
 
+function mappingTopics(mapping) {
+  return mapping.topics.map((name) => state.scan.topics.find((topic) => topic.name === name));
+}
+
+function isImageMapping(mapping) {
+  const topics = mappingTopics(mapping);
+  return topics.length === 1 && topics[0]?.kind === "image";
+}
+
+function genericTopicNames(topic) {
+  if (!Array.isArray(topic.shape) || topic.shape.length !== 1) return [];
+  const prefix = topic.name.replace(/^\/+|\/+$/g, "").replaceAll("/", ".") || "value";
+  return Array.from({length: topic.shape[0]}, (_, index) => `${prefix}.dim_${index + 1}`);
+}
+
+function automaticMappingNames(mapping) {
+  return mappingTopics(mapping).flatMap((topic) => {
+    if (!topic) return [];
+    if (Array.isArray(topic.names) && topic.names.length === topic.shape?.[0]) {
+      return [...topic.names];
+    }
+    return genericTopicNames(topic);
+  });
+}
+
+function parseMappingNames(value) {
+  if (!value.trim()) return [];
+  return value.replaceAll("\r", "").split("\n").map((name) => name.trim());
+}
+
+function mappingNamesValidation(mapping) {
+  if (isImageMapping(mapping)) return {valid: true, expected: 0, count: 0, message: ""};
+  const shape = lerobotShape(mapping);
+  const expected = shape?.length === 1 ? shape[0] : 0;
+  const names = Array.isArray(mapping.names) ? mapping.names : [];
+  if (!expected) {
+    return {valid: false, expected, count: names.length, message: "无法确定合并后的向量维度"};
+  }
+  if (names.length !== expected) {
+    return {
+      valid: false,
+      expected,
+      count: names.length,
+      message: `需要 ${expected} 个名称，当前为 ${names.length} 个`,
+    };
+  }
+  if (names.some((name) => !name)) {
+    return {valid: false, expected, count: names.length, message: "维度名称不能为空"};
+  }
+  if (new Set(names).size !== names.length) {
+    return {valid: false, expected, count: names.length, message: "维度名称不能重复"};
+  }
+  return {valid: true, expected, count: names.length, message: ""};
+}
+
 function setHeaderStatus(label, mode = "ready") {
   elements.headerStatus.replaceChildren();
   const dot = document.createElement("span");
@@ -226,7 +281,9 @@ function addMapping() {
     elements.mappingError.textContent = "图像 topic 需要单独映射，不能与其他 topic 合并";
     return;
   }
-  state.mappings.push({ target, topics: [...state.selectedTopics] });
+  const mapping = { target, topics: [...state.selectedTopics] };
+  if (!isImageMapping(mapping)) mapping.names = automaticMappingNames(mapping);
+  state.mappings.push(mapping);
   state.selectedTopics = [];
   elements.mappingName.value = "";
   renderTopics();
@@ -264,6 +321,31 @@ function renderMappings() {
       source.textContent = `${topicIndex + 1}. ${topic}`;
       sources.append(source);
     });
+    const namesControl = row.querySelector(".mapping-names");
+    if (!isImageMapping(mapping)) {
+      namesControl.hidden = false;
+      const editor = row.querySelector(".mapping-names-editor");
+      const count = row.querySelector(".mapping-names-count");
+      const error = row.querySelector(".mapping-names-error");
+      const updateNamesStatus = () => {
+        const validation = mappingNamesValidation(mapping);
+        count.textContent = `${validation.count} / ${validation.expected}`;
+        count.classList.toggle("is-error", !validation.valid);
+        error.textContent = validation.message;
+        validateExport();
+      };
+      editor.value = mapping.names.join("\n");
+      editor.addEventListener("input", () => {
+        mapping.names = parseMappingNames(editor.value);
+        updateNamesStatus();
+      });
+      row.querySelector(".auto-names-button").addEventListener("click", () => {
+        mapping.names = automaticMappingNames(mapping);
+        editor.value = mapping.names.join("\n");
+        updateNamesStatus();
+      });
+      updateNamesStatus();
+    }
     row.querySelector(".remove-button").addEventListener("click", () => {
       state.mappings.splice(mappingIndex, 1);
       renderMappings();
@@ -288,6 +370,7 @@ function updateResolvedPath() {
 function validateExport() {
   const complete =
     state.mappings.length > 0 &&
+    state.mappings.every((mapping) => mappingNamesValidation(mapping).valid) &&
     Number(elements.fps.value) > 0 &&
     elements.repoId.value.trim() &&
     elements.root.value.trim() &&

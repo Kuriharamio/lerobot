@@ -204,6 +204,20 @@
         </div>
         <div class="mapping-sources"></div>
         <button class="remove-button" type="button">移除</button>
+        <div class="mapping-names" hidden>
+          <div class="mapping-names-heading">
+            <span>维度名称</span>
+            <span class="mapping-names-count"></span>
+            <button class="auto-names-button" type="button">自动填充</button>
+          </div>
+          <textarea
+            class="mapping-names-editor"
+            rows="5"
+            spellcheck="false"
+            aria-label="逐行编辑 feature 维度名称"
+          ></textarea>
+          <p class="mapping-names-error" role="alert"></p>
+        </div>
       </article>
     </template>
 

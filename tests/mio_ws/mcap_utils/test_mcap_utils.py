@@ -23,6 +23,14 @@ from PIL import Image
 
 from mio_ws.src.mcap_utils.common import decode_image, discover_mcap_files, scan_mcap_item
 from mio_ws.src.mcap_utils.mcap_split.server import ApplicationState, McapSplitRequestHandler
+from mio_ws.src.mcap_utils.mcap_to_v30.converter import (
+    EpisodeStreams,
+    McapSample,
+    _describe_topic_value,
+    _infer_features,
+    _validate_mappings,
+    scan_mcap_source,
+)
 from mio_ws.src.mcap_utils.splitter import (
     ExistingOutputsError,
     split_mcap_file,
@@ -97,6 +105,28 @@ uint8[] data
                 publish_time=1_750_000_000_000_000_017 + index * 100_000_000,
                 sequence=index,
             )
+        writer.finish()
+
+
+def _write_joint_state_mcap(path: Path, topic: str = "/joint_states") -> None:
+    message_definition = """string[] name
+float64[] position
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        writer = Ros2Writer(stream)
+        schema = writer.register_msgdef("example_msgs/msg/JointState", message_definition)
+        writer.write_message(
+            topic,
+            schema,
+            {
+                "name": ["left_joint_1", "left_gripper", "right_joint_1", "right_gripper"],
+                "position": [0.1, 0.2, 0.3, 0.4],
+            },
+            log_time=1_750_000_000_000_000_000,
+            publish_time=1_750_000_000_000_000_017,
+            sequence=0,
+        )
         writer.finish()
 
 
@@ -319,6 +349,109 @@ def test_decode_ros_raw_and_compressed_images() -> None:
     Image.fromarray(rgb, mode="RGB").save(buffer, format="PNG")
     compressed_message = SimpleNamespace(format="png", data=buffer.getvalue())
     np.testing.assert_array_equal(decode_image(compressed_message), rgb)
+
+
+def test_scan_mcap_source_generates_names_from_topic_and_index(tmp_path: Path) -> None:
+    source = tmp_path / "joint_states.mcap"
+    _write_joint_state_mcap(source)
+
+    result = scan_mcap_source(source)
+
+    topic = result["topics"][0]
+    assert topic["shape"] == [4]
+    assert topic["names"] == [
+        "joint_states.dim_1",
+        "joint_states.dim_2",
+        "joint_states.dim_3",
+        "joint_states.dim_4",
+    ]
+
+
+def test_feature_mapping_uses_automatic_or_user_supplied_names() -> None:
+    left = SimpleNamespace(name=["left_joint_1", "left_gripper"], position=[0.1, 0.2])
+    right = SimpleNamespace(name=["right_joint_1", "right_gripper"], position=[0.3, 0.4])
+    episode = EpisodeStreams(
+        streams={
+            "/left/joint_states": [McapSample(0.0, left)],
+            "/right/joint_states": [McapSample(0.0, right)],
+        },
+        times={"/left/joint_states": [0.0], "/right/joint_states": [0.0]},
+    )
+    automatic = _validate_mappings(
+        [
+            {
+                "target": "observation.state",
+                "topics": ["/left/joint_states", "/right/joint_states"],
+            }
+        ]
+    )
+    automatic_features, _ = _infer_features(episode, automatic, use_videos=True)
+    assert automatic_features["observation.state"] == {
+        "dtype": "float32",
+        "shape": (4,),
+        "names": [
+            "left.joint_states.dim_1",
+            "left.joint_states.dim_2",
+            "right.joint_states.dim_1",
+            "right.joint_states.dim_2",
+        ],
+    }
+
+    custom_names = ["arm.left", "gripper.left", "arm.right", "gripper.right"]
+    customized = _validate_mappings(
+        [
+            {
+                "target": "action",
+                "topics": ["/left/joint_states", "/right/joint_states"],
+                "names": custom_names,
+            }
+        ]
+    )
+    customized_features, _ = _infer_features(episode, customized, use_videos=True)
+    assert customized_features["action"]["names"] == custom_names
+
+
+def test_feature_mapping_rejects_invalid_names() -> None:
+    value = SimpleNamespace(name=["joint_1", "joint_2"], position=[0.1, 0.2])
+    episode = EpisodeStreams(
+        streams={"/joint_states": [McapSample(0.0, value)]},
+        times={"/joint_states": [0.0]},
+    )
+    mappings = _validate_mappings([{"target": "action", "topics": ["/joint_states"], "names": ["only_one"]}])
+
+    with pytest.raises(ValueError, match="2 values but 1 names"):
+        _infer_features(episode, mappings, use_videos=True)
+
+    with pytest.raises(ValueError, match="must be unique"):
+        _validate_mappings(
+            [
+                {
+                    "target": "action",
+                    "topics": ["/joint_states"],
+                    "names": ["joint.pos", "joint.pos"],
+                }
+            ]
+        )
+
+
+def test_describe_topic_value_generates_stable_fallback_names() -> None:
+    assert _describe_topic_value([1.0, 2.0], "/arm/command") == {
+        "shape": [2],
+        "names": ["arm.command.dim_1", "arm.command.dim_2"],
+    }
+
+
+def test_describe_topic_value_uses_one_based_index_for_each_dimension() -> None:
+    value = SimpleNamespace(name=[f"j{index}" for index in range(6)], position=np.arange(6))
+
+    assert _describe_topic_value(value, "/observation/follower_left/arm/end_effector_pose")["names"] == [
+        "observation.follower_left.arm.end_effector_pose.dim_1",
+        "observation.follower_left.arm.end_effector_pose.dim_2",
+        "observation.follower_left.arm.end_effector_pose.dim_3",
+        "observation.follower_left.arm.end_effector_pose.dim_4",
+        "observation.follower_left.arm.end_effector_pose.dim_5",
+        "observation.follower_left.arm.end_effector_pose.dim_6",
+    ]
 
 
 def test_preview_timeline_serializes_epoch_nanoseconds_without_precision_loss(tmp_path: Path) -> None:

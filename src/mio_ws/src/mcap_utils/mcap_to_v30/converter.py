@@ -60,6 +60,7 @@ class EpisodeStreams:
 class FeatureMapping:
     target: str
     topics: tuple[str, ...]
+    names: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -186,11 +187,15 @@ def scan_mcap_source(source: Path, progress: ProgressCallback | None = None) -> 
                 topic = channel.topic
                 topic_file = per_topic[topic]
                 topic_file["count"] += 1
-                topic_file["first_ns"] = message.log_time if topic_file["first_ns"] is None else min(
-                    topic_file["first_ns"], message.log_time
+                topic_file["first_ns"] = (
+                    message.log_time
+                    if topic_file["first_ns"] is None
+                    else min(topic_file["first_ns"], message.log_time)
                 )
-                topic_file["last_ns"] = message.log_time if topic_file["last_ns"] is None else max(
-                    topic_file["last_ns"], message.log_time
+                topic_file["last_ns"] = (
+                    message.log_time
+                    if topic_file["last_ns"] is None
+                    else max(topic_file["last_ns"], message.log_time)
                 )
 
                 totals = topic_totals[topic]
@@ -241,7 +246,7 @@ def scan_mcap_source(source: Path, progress: ProgressCallback | None = None) -> 
 
     if progress:
         progress({"stage": "shape", "message": "正在探测 topic shape", "progress": 93})
-    topic_shapes = _probe_topic_shapes(files, set(topic_totals), progress=progress)
+    topic_features = _probe_topic_features(files, set(topic_totals), progress=progress)
     topics = []
     for name, totals in sorted(topic_totals.items()):
         fps = totals["intervals"] / totals["duration_s"] if totals["duration_s"] > 0 else 0.0
@@ -256,7 +261,8 @@ def scan_mcap_source(source: Path, progress: ProgressCallback | None = None) -> 
                 "schema_encoding": ", ".join(sorted(totals["schema_encodings"])),
                 "message_encoding": ", ".join(sorted(totals["message_encodings"])),
                 "kind": _topic_kind(" ".join(schemas)),
-                "shape": topic_shapes.get(name),
+                "shape": topic_features.get(name, {}).get("shape"),
+                "names": topic_features.get(name, {}).get("names"),
             }
         )
 
@@ -379,9 +385,7 @@ def _decode_foxglove_joint_states(buffer: bytes) -> dict[str, Any]:
         for field_index, key in enumerate(values, start=1):
             value_location = _fb_table_field(buffer, joint_table, field_index)
             value = (
-                struct.unpack_from("<d", buffer, value_location)[0]
-                if value_location is not None
-                else np.nan
+                struct.unpack_from("<d", buffer, value_location)[0] if value_location is not None else np.nan
             )
             values[key].append(value)
 
@@ -541,12 +545,6 @@ def _read_mcap_streams(path: Path, topics: set[str]) -> EpisodeStreams:
     return EpisodeStreams(streams=streams, times=times)
 
 
-def _get_attr_or_item(value: Any, key: str) -> Any:
-    if isinstance(value, dict):
-        return value[key]
-    return getattr(value, key)
-
-
 def _as_numeric_array(value: Any) -> np.ndarray | None:
     if isinstance(value, np.ndarray):
         array = value
@@ -591,6 +589,24 @@ def _flatten_vector(value: Any) -> np.ndarray:
     if hasattr(value, "position") and hasattr(value, "orientation"):
         return np.concatenate([_flatten_vector(value.position), _flatten_vector(value.orientation)])
     raise ValueError(f"Could not infer a numeric vector from message type {type(value)!r}.")
+
+
+def _topic_name_prefix(topic: str) -> str:
+    return topic.strip("/").replace("/", ".") or "value"
+
+
+def _topic_vector_names(topic: str, size: int) -> list[str]:
+    prefix = _topic_name_prefix(topic)
+    return [f"{prefix}.dim_{index}" for index in range(1, size + 1)]
+
+
+def _describe_topic_value(value: Any, topic: str) -> dict[str, Any]:
+    if _looks_like_image(value):
+        image = _decode_image(value)
+        return {"shape": [int(image.shape[0]), int(image.shape[1]), 3], "names": None}
+    vector = _flatten_vector(value)
+    names = _topic_vector_names(topic, int(vector.shape[0]))
+    return {"shape": [int(vector.shape[0])], "names": names}
 
 
 def _bytes_from_ros_sequence(data: Any) -> bytes:
@@ -673,16 +689,9 @@ def _looks_like_image(value: Any) -> bool:
     return all(hasattr(value, attribute) for attribute in ("height", "width", "encoding", "data"))
 
 
-def _shape_from_value(value: Any) -> list[int]:
-    if _looks_like_image(value):
-        image = _decode_image(value)
-        return [int(image.shape[0]), int(image.shape[1]), 3]
-    return [int(_flatten_vector(value).shape[0])]
-
-
-def _probe_topic_shapes(
+def _probe_topic_features(
     files: list[Path], topics: set[str], progress: ProgressCallback | None = None
-) -> dict[str, list[int]]:
+) -> dict[str, dict[str, Any]]:
     try:
         from mcap.reader import make_reader
     except ImportError:
@@ -696,7 +705,7 @@ def _probe_topic_shapes(
         ros2_decoder_factory = None
 
     unresolved = set(topics)
-    shapes: dict[str, list[int]] = {}
+    features: dict[str, dict[str, Any]] = {}
     for file_index, path in enumerate(files):
         if not unresolved:
             break
@@ -737,11 +746,11 @@ def _probe_topic_shapes(
                         )
                     except ValueError:
                         continue
-                    shapes[topic] = _shape_from_value(decoded[0].value)
+                    features[topic] = _describe_topic_value(decoded[0].value, topic)
                     unresolved.remove(topic)
                 else:
                     try:
-                        shapes[topic] = _shape_from_value(value)
+                        features[topic] = _describe_topic_value(value, topic)
                     except (ValueError, AttributeError, KeyError, TypeError):
                         failed_topics.add(topic)
                         continue
@@ -754,14 +763,12 @@ def _probe_topic_shapes(
             if topic not in unresolved or not samples:
                 continue
             try:
-                decoded = _decode_encoded_video_samples(
-                    samples, path=path, topic=topic, warn_invalid=False
-                )
-                shapes[topic] = _shape_from_value(decoded[0].value)
+                decoded = _decode_encoded_video_samples(samples, path=path, topic=topic, warn_invalid=False)
+                features[topic] = _describe_topic_value(decoded[0].value, topic)
             except (ValueError, AttributeError, KeyError, TypeError):
                 continue
             unresolved.remove(topic)
-    return shapes
+    return features
 
 
 def _nearest_sample(
@@ -791,6 +798,16 @@ def _validate_mappings(raw_mappings: list[dict[str, Any]]) -> list[FeatureMappin
     for raw in raw_mappings:
         target = str(raw.get("target", "")).strip()
         topics = tuple(str(topic).strip() for topic in raw.get("topics", []) if str(topic).strip())
+        raw_names = raw.get("names")
+        names: tuple[str, ...] | None = None
+        if raw_names is not None:
+            if not isinstance(raw_names, list) or not all(isinstance(name, str) for name in raw_names):
+                raise ValueError(f"Feature names for {target!r} must be a list of strings.")
+            names = tuple(name.strip() for name in raw_names)
+            if not names or any(not name for name in names):
+                raise ValueError(f"Feature names for {target!r} cannot be empty.")
+            if len(set(names)) != len(names):
+                raise ValueError(f"Feature names for {target!r} must be unique.")
         if not target or not topics:
             raise ValueError("Every mapping needs a target name and at least one source topic.")
         if target in targets:
@@ -798,7 +815,7 @@ def _validate_mappings(raw_mappings: list[dict[str, Any]]) -> list[FeatureMappin
         if target in reserved:
             raise ValueError(f"{target!r} is managed internally by LeRobot and cannot be mapped.")
         targets.add(target)
-        mappings.append(FeatureMapping(target=target, topics=topics))
+        mappings.append(FeatureMapping(target=target, topics=topics, names=names))
     return mappings
 
 
@@ -821,10 +838,24 @@ def _infer_features(
             }
             specs.append(FeatureSpec(mapping=mapping, kind="image"))
         else:
-            vector = np.concatenate([_flatten_vector(value) for value in values]).astype(
-                np.float32, copy=False
+            vectors = [_flatten_vector(value) for value in values]
+            vector = np.concatenate(vectors).astype(np.float32, copy=False)
+            names = mapping.names or tuple(
+                name
+                for topic, value in zip(mapping.topics, values, strict=True)
+                for name in _topic_vector_names(topic, int(_flatten_vector(value).shape[0]))
             )
-            features[mapping.target] = {"dtype": "float32", "shape": tuple(vector.shape), "names": None}
+            if len(names) != vector.shape[0]:
+                raise ValueError(
+                    f"Feature {mapping.target!r} has {vector.shape[0]} values but {len(names)} names."
+                )
+            if len(set(names)) != len(names):
+                raise ValueError(f"Feature names for {mapping.target!r} must be unique.")
+            features[mapping.target] = {
+                "dtype": "float32",
+                "shape": tuple(vector.shape),
+                "names": list(names),
+            }
             specs.append(FeatureSpec(mapping=mapping, kind="vector"))
     return features, specs
 

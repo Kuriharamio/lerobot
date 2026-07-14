@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -31,6 +32,7 @@ from mio_ws.src.mcap_utils.mcap_to_v30.converter import (
     _validate_mappings,
     scan_mcap_source,
 )
+from mio_ws.src.mcap_utils.mcap_to_v30.server import _log_scan_summary
 from mio_ws.src.mcap_utils.splitter import (
     ExistingOutputsError,
     split_mcap_file,
@@ -451,6 +453,24 @@ def test_describe_topic_value_uses_one_based_index_for_each_dimension() -> None:
         "observation.follower_left.arm.end_effector_pose.dim_4",
         "observation.follower_left.arm.end_effector_pose.dim_5",
         "observation.follower_left.arm.end_effector_pose.dim_6",
+    ]
+
+
+def test_conversion_server_logs_data_summary_after_scan(caplog: pytest.LogCaptureFixture) -> None:
+    result = {
+        "source": "/data/recordings",
+        "file_count": 2,
+        "topics": [{"name": "/camera"}, {"name": "/state"}],
+        "total_messages": 12_345,
+        "total_duration_s": 42.125,
+        "total_size_bytes": 3 * 1024 * 1024,
+    }
+
+    with caplog.at_level(logging.INFO):
+        _log_scan_summary(result)
+
+    assert caplog.messages == [
+        "MCAP data: 2 file(s) | 2 topic(s) | 12345 message(s) | 42.125 s | 3.00 MiB | /data/recordings"
     ]
 
 

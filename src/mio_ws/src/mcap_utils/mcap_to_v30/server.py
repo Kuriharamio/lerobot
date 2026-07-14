@@ -38,6 +38,19 @@ from mio_ws.src.mcap_utils.mcap_to_v30.converter import (
 STATIC_ROOT = Path(__file__).parent / "static"
 
 
+def _log_scan_summary(result: dict[str, Any]) -> None:
+    size_mib = result["total_size_bytes"] / (1024 * 1024)
+    logging.info(
+        "MCAP data: %d file(s) | %d topic(s) | %d message(s) | %.3f s | %.2f MiB | %s",
+        result["file_count"],
+        len(result["topics"]),
+        result["total_messages"],
+        result["total_duration_s"],
+        size_mib,
+        result["source"],
+    )
+
+
 class ApplicationState:
     def __init__(self, source: Path) -> None:
         self.source = source.expanduser().resolve()
@@ -82,6 +95,7 @@ class ApplicationState:
                     "progress": 100,
                     "message": "MCAP 解析完成",
                 }
+            _log_scan_summary(result)
         except Exception as error:
             logging.exception("MCAP scan failed")
             self._update_scan(
@@ -141,9 +155,7 @@ class ApplicationState:
         self._update_job({"state": "running", "message": "开始导出"})
         try:
             result = convert_mcap_source(self.source, mappings, parameters, self._progress)
-            self._update_job(
-                {"state": "completed", "progress": 100, "message": "导出完成", "result": result}
-            )
+            self._update_job({"state": "completed", "progress": 100, "message": "导出完成", "result": result})
         except Exception as error:
             logging.exception("MCAP conversion failed")
             self._update_job(
@@ -281,16 +293,15 @@ def main() -> None:
     log_level = getattr(logging, args.log_level.upper(), None)
     if not isinstance(log_level, int):
         raise ValueError(f"Invalid --log-level: {args.log_level}")
-    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
+    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s", force=True)
 
     source = args.mcap.expanduser().resolve()
-    files = discover_mcap_files(source)
+    discover_mcap_files(source)
     state = ApplicationState(source)
     server = _create_server(args.host, args.port, state)
     port = server.server_address[1]
     browser_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
     url = f"http://{browser_host}:{port}"
-    logging.info("Found %d MCAP file(s) under %s", len(files), source)
     logging.info("MCAP to LeRobot v3.0 UI: %s", url)
 
     if not args.no_browser:

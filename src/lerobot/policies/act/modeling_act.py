@@ -710,21 +710,59 @@ class ACT(nn.Module):
         if self.config.env_state_feature:
             encoder_in_tokens.append(self.encoder_env_state_input_proj(batch[OBS_ENV_STATE]))
 
+        # if self.config.image_features:
+        #     # For a list of images, the H and W may vary but H*W is constant.
+        #     # NOTE: If modifying this section, verify on MPS devices that
+        #     # gradients remain stable (no explosions or NaNs).
+        #     for img in batch[OBS_IMAGES]:
+        #         cam_features = self.backbone(img)["feature_map"]
+        #         cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
+        #         cam_features = self.encoder_img_feat_input_proj(cam_features)
+
+        #         # Rearrange features to (sequence, batch, dim).
+        #         cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
+        #         cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
+
+        #         # Extend immediately instead of accumulating and concatenating
+        #         # Convert to list to extend properly
+        #         encoder_in_tokens.extend(list(cam_features))
+        #         encoder_in_pos_embed.extend(list(cam_pos_embed))
         if self.config.image_features:
-            # For a list of images, the H and W may vary but H*W is constant.
-            # NOTE: If modifying this section, verify on MPS devices that
-            # gradients remain stable (no explosions or NaNs).
-            for img in batch[OBS_IMAGES]:
-                cam_features = self.backbone(img)["feature_map"]
-                cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
+            images = batch[OBS_IMAGES]
+
+            # Run equal-shaped camera images through the backbone as one batch.
+            # Camera-major concatenation preserves the original camera/token order
+            # after splitting the output back into groups of `batch_size`.
+            can_batch_cameras = all(
+                image.shape == images[0].shape for image in images[1:]
+            )
+
+            if can_batch_cameras:
+                camera_batch = torch.cat(images, dim=0)
+                batched_features = self.backbone(camera_batch)["feature_map"]
+                camera_feature_maps = batched_features.split(batch_size, dim=0)
+            else:
+                # Keep support for different camera resolutions. clone() gives each
+                # camera ownership of its feature map when the externally wrapped
+                # backbone uses CUDA Graph output buffers.
+                camera_feature_maps = tuple(
+                    self.backbone(image)["feature_map"].clone()
+                    for image in images
+                )
+
+            for cam_features in camera_feature_maps:
+                cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(
+                    dtype=cam_features.dtype
+                )
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
 
-                # Rearrange features to (sequence, batch, dim).
-                cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
-                cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
+                cam_features = einops.rearrange(
+                    cam_features, "b c h w -> (h w) b c"
+                )
+                cam_pos_embed = einops.rearrange(
+                    cam_pos_embed, "b c h w -> (h w) b c"
+                )
 
-                # Extend immediately instead of accumulating and concatenating
-                # Convert to list to extend properly
                 encoder_in_tokens.extend(list(cam_features))
                 encoder_in_pos_embed.extend(list(cam_pos_embed))
 
